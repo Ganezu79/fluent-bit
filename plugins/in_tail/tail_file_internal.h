@@ -35,7 +35,7 @@ struct flb_tail_file {
     off_t offset;
     off_t last_line;
     ino_t inode;
-    char *name;                 /* target file name */
+    char *name;
     size_t name_len;
     time_t rotated;
     off_t pending_bytes;

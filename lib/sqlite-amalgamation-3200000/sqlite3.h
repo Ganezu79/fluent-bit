@@ -846,8 +846,8 @@ struct sqlite3_io_methods {
 ** [sqlite3_file_control()] with this opcode as doing so may disrupt the 
 ** operation of the specialized VFSes that do require it.  
 **
-** <li>[[SQLITE_FCNTL_WIN32_AV_RETRY]]
-** ^The [SQLITE_FCNTL_WIN32_AV_RETRY] opcode is used to configure automatic
+** <li>[[SQLITE_FCNTL_WIN64_AV_RETRY]]
+** ^The [SQLITE_FCNTL_WIN64_AV_RETRY] opcode is used to configure automatic
 ** retry counts and intervals for certain disk I/O operations for the
 ** windows [VFS] in order to provide robustness in the presence of
 ** anti-virus programs.  By default, the windows VFS will retry file read,
@@ -985,14 +985,14 @@ struct sqlite3_io_methods {
 ** on whether or not the file has been renamed, moved, or deleted since it
 ** was first opened.
 **
-** <li>[[SQLITE_FCNTL_WIN32_GET_HANDLE]]
-** The [SQLITE_FCNTL_WIN32_GET_HANDLE] opcode can be used to obtain the
+** <li>[[SQLITE_FCNTL_WIN64_GET_HANDLE]]
+** The [SQLITE_FCNTL_WIN64_GET_HANDLE] opcode can be used to obtain the
 ** underlying native file handle associated with a file handle.  This file
 ** control interprets its argument as a pointer to a native file handle and
 ** writes the resulting value there.
 **
-** <li>[[SQLITE_FCNTL_WIN32_SET_HANDLE]]
-** The [SQLITE_FCNTL_WIN32_SET_HANDLE] opcode is used for debugging.  This
+** <li>[[SQLITE_FCNTL_WIN64_SET_HANDLE]]
+** The [SQLITE_FCNTL_WIN64_SET_HANDLE] opcode is used for debugging.  This
 ** opcode causes the xFileControl method to swap the file handle with the one
 ** pointed to by the pArg argument.  This capability is used during testing
 ** and only needs to be supported when SQLITE_TEST is defined.
@@ -1022,7 +1022,7 @@ struct sqlite3_io_methods {
 #define SQLITE_FCNTL_CHUNK_SIZE              6
 #define SQLITE_FCNTL_FILE_POINTER            7
 #define SQLITE_FCNTL_SYNC_OMITTED            8
-#define SQLITE_FCNTL_WIN32_AV_RETRY          9
+#define SQLITE_FCNTL_WIN64_AV_RETRY          9
 #define SQLITE_FCNTL_PERSIST_WAL            10
 #define SQLITE_FCNTL_OVERWRITE              11
 #define SQLITE_FCNTL_VFSNAME                12
@@ -1035,13 +1035,13 @@ struct sqlite3_io_methods {
 #define SQLITE_FCNTL_HAS_MOVED              20
 #define SQLITE_FCNTL_SYNC                   21
 #define SQLITE_FCNTL_COMMIT_PHASETWO        22
-#define SQLITE_FCNTL_WIN32_SET_HANDLE       23
+#define SQLITE_FCNTL_WIN64_SET_HANDLE       23
 #define SQLITE_FCNTL_WAL_BLOCK              24
 #define SQLITE_FCNTL_ZIPVFS                 25
 #define SQLITE_FCNTL_RBU                    26
 #define SQLITE_FCNTL_VFS_POINTER            27
 #define SQLITE_FCNTL_JOURNAL_POINTER        28
-#define SQLITE_FCNTL_WIN32_GET_HANDLE       29
+#define SQLITE_FCNTL_WIN64_GET_HANDLE       29
 #define SQLITE_FCNTL_PDB                    30
 
 /* deprecated names */
@@ -1832,11 +1832,11 @@ struct sqlite3_mem_methods {
 ** ^If either argument to this option is negative, then that argument is
 ** changed to its compile-time default.
 **
-** [[SQLITE_CONFIG_WIN32_HEAPSIZE]]
-** <dt>SQLITE_CONFIG_WIN32_HEAPSIZE
-** <dd>^The SQLITE_CONFIG_WIN32_HEAPSIZE option is only available if SQLite is
-** compiled for Windows with the [SQLITE_WIN32_MALLOC] pre-processor macro
-** defined. ^SQLITE_CONFIG_WIN32_HEAPSIZE takes a 32-bit unsigned integer value
+** [[SQLITE_CONFIG_WIN64_HEAPSIZE]]
+** <dt>SQLITE_CONFIG_WIN64_HEAPSIZE
+** <dd>^The SQLITE_CONFIG_WIN64_HEAPSIZE option is only available if SQLite is
+** compiled for Windows with the [SQLITE_WIN64_MALLOC] pre-processor macro
+** defined. ^SQLITE_CONFIG_WIN64_HEAPSIZE takes a 32-bit unsigned integer value
 ** that specifies the maximum size of the created heap.
 **
 ** [[SQLITE_CONFIG_PCACHE_HDRSZ]]
@@ -1895,7 +1895,7 @@ struct sqlite3_mem_methods {
 #define SQLITE_CONFIG_COVERING_INDEX_SCAN 20  /* int */
 #define SQLITE_CONFIG_SQLLOG       21  /* xSqllog, void* */
 #define SQLITE_CONFIG_MMAP_SIZE    22  /* sqlite3_int64, sqlite3_int64 */
-#define SQLITE_CONFIG_WIN32_HEAPSIZE      23  /* int nByte */
+#define SQLITE_CONFIG_WIN64_HEAPSIZE      23  /* int nByte */
 #define SQLITE_CONFIG_PCACHE_HDRSZ        24  /* int *psz */
 #define SQLITE_CONFIG_PMASZ               25  /* unsigned int szPma */
 #define SQLITE_CONFIG_STMTJRNL_SPILL      26  /* int nByte */

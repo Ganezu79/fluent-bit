@@ -30,6 +30,11 @@
 #include <fluent-bit/flb_error.h>
 #include "in_lib.h"
 
+#if defined(_WIN32) || defined(_WIN64)
+#define read(fd,buf,len)        recv(fd,(char*)buf,(int) len,0)
+#define write(fd,buf,len)       send(fd,(char*)buf,(int) len,0)
+#endif
+
 static int in_lib_collect(struct flb_input_instance *i_ins,
                           struct flb_config *config, void *in_context)
 {
@@ -60,6 +65,7 @@ static int in_lib_collect(struct flb_input_instance *i_ins,
     bytes = read(ctx->fd,
                  ctx->buf_data + ctx->buf_len,
                  capacity);
+
     flb_trace("in_lib read() = %i", bytes);
     if (bytes == -1) {
         perror("read");
@@ -118,9 +124,7 @@ int in_lib_init(struct flb_input_instance *in,
     ctx->buf_len = 0;
 
     if (!ctx->buf_data) {
-        flb_error("Could not allocate initial buf memory buffer");
-        flb_free(ctx);
-        return -1;
+        flb_utils_error_c("Could not allocate initial buf memory buffer");
     }
 
     /* Init communication channel */
@@ -136,10 +140,7 @@ int in_lib_init(struct flb_input_instance *in,
                                         ctx->fd,
                                         config);
     if (ret == -1) {
-        flb_error("Could not set collector for LIB input plugin");
-        flb_free(ctx->buf_data);
-        flb_free(ctx);
-        return -1;
+        flb_utils_error_c("Could not set collector for LIB input plugin");
     }
 
     flb_pack_state_init(&ctx->state);

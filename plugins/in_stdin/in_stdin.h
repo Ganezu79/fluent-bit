@@ -22,6 +22,7 @@
 
 #include <fluent-bit/flb_config.h>
 #include <fluent-bit/flb_input.h>
+#include <fluent-bit/flb_utils.h>
 
 /* STDIN Input configuration & context */
 struct flb_in_stdin_config {

@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -75,11 +75,11 @@ char *mk_string_copy_substr(const char *string, int pos_init, int pos_end);
 
 char *mk_string_tolower(const char *in);
 
-#if defined (__APPLE__) || defined (_WIN32)
+#if defined (__APPLE__) || defined(_WIN32) || defined(_WIN64)
 void *memrchr(const void *s, int c, size_t n);
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN64) || defined(_WIN32)
 char *strndup (const char *s, size_t n);
 char *strcasestr(const char *phaystack, const char *pneedle);
 #endif

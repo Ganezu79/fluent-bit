@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *  Copyright (C) 2010, Jonathan Gonzalez V. <zeus@gnu.org>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +23,7 @@
 
 #include <stddef.h>
 
-#ifdef _WIN32
+#if defined(_WIN64) || defined(_WIN32)
 /* Windows */
 #define container_of(address, type, field) ((type *)(                   \
                                                      (PCHAR)(address) - \

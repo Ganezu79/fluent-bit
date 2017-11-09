@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 #include <mk_core/mk_utils.h>
 #include <mk_core/mk_event.h>
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(_WIN64)
     #include "mk_event_libevent.c"
 #elif defined(MK_HAVE_EVENT_SELECT)
     #include "mk_event_select.c"

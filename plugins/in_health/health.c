@@ -22,6 +22,7 @@
 #include <fluent-bit/flb_input.h>
 #include <fluent-bit/flb_config.h>
 #include <fluent-bit/flb_upstream.h>
+#include <fluent-bit/flb_utils.h>
 #include <fluent-bit/flb_pack.h>
 #include <msgpack.h>
 
@@ -219,9 +220,7 @@ static int in_health_init(struct flb_input_instance *in,
                                        ctx->interval_nsec,
                                        config);
     if (ret == -1) {
-        flb_error("Could not set collector for Health input plugin");
-        flb_free(ctx);
-        return -1;
+        flb_utils_error_c("Could not set collector for Health input plugin");
     }
 
     return 0;

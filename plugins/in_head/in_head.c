@@ -54,7 +54,7 @@ static int read_lines(struct flb_in_head_config *head_config)
         perror("fopen");
         return -1;
     }
-    
+
     for(i=0; i<head_config->lines; i++){
         ret_buf = fgets(buf, BUF_SIZE_MAX-1, fp);
         if (ret_buf == NULL) {
@@ -180,7 +180,7 @@ static int split_lines_per_record(struct flb_input_instance *i_ins,
     if (head_config->add_path == FLB_TRUE) {
         num_map++;
     }
-    
+
     /* Mark the start of a 'buffer write' operation */
     flb_input_buf_write_start(i_ins);
 
@@ -369,7 +369,7 @@ static int in_head_init(struct flb_input_instance *in,
 
     head_config->buf = flb_malloc(head_config->buf_size);
     if (head_config->buf == NULL) {
-        flb_error("could not allocate head buffer");
+        flb_utils_error_c("could not allocate head buffer");
         goto init_error;
     }
 
@@ -383,7 +383,7 @@ static int in_head_init(struct flb_input_instance *in,
                                        head_config->interval_sec,
                                        head_config->interval_nsec, config);
     if (ret < 0) {
-        flb_error("could not set collector for head input plugin");
+        flb_utils_error_c("could not set collector for head input plugin");
         goto init_error;
     }
 

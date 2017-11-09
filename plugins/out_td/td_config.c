@@ -19,6 +19,7 @@
 
 #include <stdlib.h>
 #include <fluent-bit.h>
+#include <fluent-bit/flb_utils.h>
 
 #include "td_config.h"
 
@@ -35,18 +36,15 @@ struct flb_out_td_config *td_config_init(struct flb_output_instance *o_ins)
     db_table = flb_output_get_property("Table", o_ins);
 
     if (!api) {
-        flb_error("[out_td] error reading API key value");
-        return NULL;
+        flb_utils_error_c("[out_td] error reading API key value");
     }
 
     if (!db_name) {
-        flb_error("[out_td] error reading Database name");
-        return NULL;
+        flb_utils_error_c("[out_td] error reading Database name");
     }
 
     if (!db_table) {
-        flb_error("[out_td] error reading Table name");
-        return NULL;
+        flb_utils_error_c("[out_td] error reading Table name");
     }
 
     config = flb_malloc(sizeof(struct flb_out_td_config));

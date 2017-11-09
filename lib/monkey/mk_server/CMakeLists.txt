@@ -3,7 +3,6 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 set(src
   monkey.c
   mk_lib.c
-  mk_fifo.c
   mk_mimetype.c
   mk_vhost.c
   mk_header.c

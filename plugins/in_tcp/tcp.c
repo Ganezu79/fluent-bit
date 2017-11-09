@@ -19,6 +19,7 @@
 
 #include <msgpack.h>
 #include <fluent-bit/flb_input.h>
+#include <fluent-bit/flb_utils.h>
 #include <fluent-bit/flb_network.h>
 
 #include "tcp.h"
@@ -92,9 +93,7 @@ static int in_tcp_init(struct flb_input_instance *in,
                                         ctx->server_fd,
                                         config);
     if (ret == -1) {
-        flb_error("Could not set collector for IN_TCP input plugin");
-        tcp_config_destroy(ctx);
-        return -1;
+        flb_utils_error_c("Could not set collector for IN_TCP input plugin");
     }
 
     return 0;

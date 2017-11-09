@@ -35,6 +35,9 @@ void flb_utils_error_c(const char *msg);
 void flb_utils_warn_c(const char *msg);
 void flb_message(int type, char *file, int line, const char *fmt, ...);
 
+FLB_EXPORT int flb_service_conf(struct flb_config *config, const char *file);
+
+
 #ifdef FLB_HAVE_FORK
 int flb_utils_set_daemon();
 #endif
@@ -52,8 +55,5 @@ int flb_utils_bool(char *val);
 void flb_utils_bytes_to_human_readable_size(size_t bytes,
                                             char *out_buf, size_t size);
 int flb_utils_time_split(char *time, int *sec, long *nsec);
-int flb_utils_write_str(char *buf, int *off, size_t size,
-                        char *str, size_t str_len);
-int flb_utils_write_str_buf(char *str, size_t str_len, char **out, size_t *out_size);
 
 #endif

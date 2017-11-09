@@ -3,7 +3,7 @@
 #include <fluent-bit/flb_info.h>
 #include <fluent-bit/flb_hash.h>
 
-#include "flb_tests_internal.h"
+#include <cutest.h>
 
 struct map {
     char *key;

@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #define _GNU_SOURCE
 #include <string.h>
 
-#ifdef _WIN32
+#if defined(_WIN64) || defined(_WIN32)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
@@ -36,7 +36,7 @@
 #include <stdio.h>
 
 /* OSX and Windows lacks of memrchr() */
-#if defined (__APPLE__) || defined (_WIN32)
+#if defined (__APPLE__) || defined (_WIN32) || defined (_WIN64)
 void *memrchr(const void *s, int c, size_t n)
 {
     const unsigned char *cp;
@@ -53,7 +53,7 @@ void *memrchr(const void *s, int c, size_t n)
 #endif
 
 /* Windows lack of strndup() & strcasestr() */
-#ifdef _WIN32
+#if defined(_WIN64) || defined(_WIN32)
 char *strndup (const char *s, size_t n)
 {
     char *result;

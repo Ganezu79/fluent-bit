@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@
 #include <monkey/mk_config.h>
 #include <monkey/mk_http.h>
 
+#include <regex.h>
+
 /* Custom error page */
 struct mk_vhost_error_page {
     short int status;
@@ -38,7 +40,7 @@ struct mk_vhost_handler_param {
 };
 
 struct mk_vhost_handler {
-    void *match;                           /* regex match rule               */
+    regex_t match;                         /* regex match rule               */
     char *name;                            /* plugin handler name            */
     int n_params;                          /* number of parameters           */
 

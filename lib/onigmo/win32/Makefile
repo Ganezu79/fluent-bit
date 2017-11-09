@@ -20,7 +20,7 @@ USE_MP = 1
 !if ("$(CPU)"=="AMD64" && !DEFINED(386)) || "$(TARGET_CPU)"=="x64" || DEFINED(AMD64) || "$(PLATFORM)"=="x64" || "$(PLATFORM)"=="X64"
 ARCH = x64
 !else
-ARCH = x86
+ARCH = x64
 !endif
 !endif
 

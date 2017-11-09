@@ -34,7 +34,14 @@
 #include <fluent-bit/flb_input.h>
 #include <fluent-bit/flb_output.h>
 #include <fluent-bit/flb_utils.h>
-#include <fluent-bit/flb_utf8.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#define PATH_MAX 1024
+#endif
+
+#define get_key(a, b, c)   mk_rconf_section_get_key(a, b, c)
+#define n_get_key(a, b, c) (intptr_t) get_key(a, b, c)
+#define s_get_key(a, b, c) (char *) get_key(a, b, c)
 
 void flb_utils_error(int err)
 {
@@ -469,193 +476,233 @@ void flb_utils_bytes_to_human_readable_size(size_t bytes,
     }
 }
 
-
-static inline void encoded_to_buf(char *out, char *in, int len)
+static void flb_service_conf_err(struct mk_rconf_section *section, char *key)
 {
-    int i;
-    char *p = out;
-
-    for (i = 0; i < len; i++) {
-        *p++ = in[i];
-    }
+    fprintf(stderr, "Invalid configuration value at %s.%s\n",
+        section->name, key);
 }
 
-/*
- * Write string pointed by 'str' to the destination buffer 'buf'. It's make sure
- * to escape sepecial characters and convert utf-8 byte characters to string
- * representation.
- */
-int flb_utils_write_str(char *buf, int *off, size_t size,
-                        char *str, size_t str_len)
+static int flb_service_conf_path_set(struct flb_config *config, char *file)
 {
-    int i;
-    int b;
-    int ret;
-    int written = 0;
-    int required;
-    int len;
-    int hex_bytes;
-    uint32_t codepoint;
-    uint32_t state = 0;
-    char tmp[16];
-    size_t available;
-    uint32_t c;
     char *p;
-    uint8_t *s;
+    char *end;
+    char path[PATH_MAX + 1];
+#if defined(_WIN32) || defined(_WIN64)
+    DWORD  retval = 0;
 
-    available = (size - *off);
-    required = str_len;
-    if (available <= required) {
-        return FLB_FALSE;
+    retval = GetFullPathName(file, PATH_MAX + 1, path, NULL);
+
+    if (retval == 0)
+    {
+        return -1;
     }
-
-    written = *off;
-    p = buf + *off;
-    for (i = 0; i < str_len; i++) {
-        if ((available - written) < 2) {
-            return FLB_FALSE;
-        }
-
-        c = (uint32_t) str[i];
-        if (c == '\\' || c == '"') {
-            *p++ = '\\';
-            *p++ = c;
-        }
-        else if (c >= '\a' && c <= '\r') {
-            *p++ = '\\';
-            switch (c) {
-            case '\n':
-                *p++ = 'n';
-                break;
-            case '\t':
-                *p++ = 't';
-                break;
-            case '\b':
-                *p++ = 'b';
-                break;
-            case '\f':
-                *p++ = 'f';
-                break;
-            case '\r':
-                *p++ = 'r';
-                break;
-            case '\a':
-                *p++ = 'a';
-                break;
-            case '\v':
-                *p++ = 'v';
-                break;
-            }
-        }
-        else if (c < 32 || c == 0x7f) {
-            if ((available - written) < 6) {
-                return FLB_FALSE;
-            }
-            len = snprintf(tmp, sizeof(tmp) - 1, "\\u%.4hhx", (unsigned char) c);
-            encoded_to_buf(p, tmp, len);
-            p += len;
-        }
-        else if (c >= 0x80 && c <= 0xFFFF) {
-            hex_bytes = flb_utf8_len(str + i);
-            if ((available - written) < (2 + hex_bytes)) {
-                return FLB_FALSE;
-            }
-
-            state = FLB_UTF8_ACCEPT;
-            codepoint = 0;
-            for (b = 0; b < hex_bytes; b++) {
-                s = (unsigned char *) str + i + b;
-                ret = flb_utf8_decode(&state, &codepoint, *s);
-                if (ret == 0) {
-                    break;
-                }
-            }
-
-            if (state != FLB_UTF8_ACCEPT) {
-                /* Invalid UTF-8 hex, just skip utf-8 bytes */
-                break;
-            }
-            else {
-                len = snprintf(tmp, sizeof(tmp) - 1, "\\u%.4x", codepoint);
-                encoded_to_buf(p, tmp, len);
-                p += len;
-            }
-            i += (hex_bytes - 1);
-        }
-        else if (c > 0xFFFF) {
-            hex_bytes = flb_utf8_len(str + i);
-            if ((available - written) < (4 + hex_bytes)) {
-                return FLB_FALSE;
-            }
-
-            state = FLB_UTF8_ACCEPT;
-            codepoint = 0;
-            for (b = 0; b < hex_bytes; b++) {
-                s = (unsigned char *) str + i + b;
-                ret = flb_utf8_decode(&state, &codepoint, *s);
-                if (ret == 0) {
-                    break;
-                }
-            }
-
-            if (state != FLB_UTF8_ACCEPT) {
-                /* Invalid UTF-8 hex, just skip utf-8 bytes */
-                flb_warn("[pack] invalid UTF-8 bytes, skipping");
-                break;
-            }
-            else {
-                len = snprintf(tmp, sizeof(tmp) - 1, "\\u%04x", codepoint);
-                encoded_to_buf(p, tmp, len);
-                p += len;
-            }
-            i += (hex_bytes - 1);
-        }
-        else {
-            *p++ = c;
-        }
-        written = (p - (buf + *off));
+#else
+    p = realpath(file, path);
+    if (!p) {
+        return -1;
     }
-
-    *off += written;
-    return FLB_TRUE;
-}
-
-
-int flb_utils_write_str_buf(char *str, size_t str_len, char **out, size_t *out_size)
-{
-    int ret;
-    int off;
-    char *tmp;
-    char *buf;
-    size_t s;
-
-    s = str_len + 1;
-    buf = flb_malloc(s);
-    if (!buf) {
-        flb_errno();
+#endif
+    /* lookup path ending and truncate */
+    end = strrchr(path, '/');
+    if (!end) {
         return -1;
     }
 
-    while (1) {
-        off = 0;
-        ret = flb_utils_write_str(buf, &off, s, str, str_len);
-        if (ret == FLB_FALSE) {
-            s += 256;
-            tmp = flb_realloc(buf, s);
-            if (!tmp) {
-                flb_errno();
-                flb_free(buf);
-                return -1;
-            }
-            buf = tmp;
+    end++;
+    *end = '\0';
+    config->conf_path = flb_strdup(path);
+
+    return 0;
+}
+
+int flb_service_conf(struct flb_config *config, const char *file)
+{
+    int ret = -1;
+    char *tmp;
+    char *name;
+    struct mk_list *head;
+    struct mk_list *h_prop;
+    struct mk_rconf *fconf = NULL;
+    struct mk_rconf_entry *entry;
+    struct mk_rconf_section *section;
+    struct flb_input_instance *in;
+    struct flb_output_instance *out;
+    struct flb_filter_instance *filter;
+
+    fconf = mk_rconf_open(file);
+    if (!fconf) {
+        return -1;
+    }
+
+    /* Process all meta commands */
+    mk_list_foreach(head, &fconf->metas) {
+        entry = mk_list_entry(head, struct mk_rconf_entry, _head);
+        flb_meta_run(config, entry->key, entry->val);
+    }
+
+    /* Set configuration root path */
+    flb_service_conf_path_set(config, file);
+
+    /* Validate sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+
+        if (strcasecmp(section->name, "SERVICE") == 0 ||
+            strcasecmp(section->name, "INPUT") == 0 ||
+            strcasecmp(section->name, "FILTER") == 0 ||
+            strcasecmp(section->name, "OUTPUT") == 0) {
+
+            /* continue on valid sections */
+            continue;
+        }
+
+        /* Extra sanity checks */
+        if (strcasecmp(section->name, "PARSER") == 0) {
+            fprintf(stderr,
+                "Section [PARSER] is not valid in the main "
+                "configuration file. It belongs to \n"
+                "the Parsers_File configuration files.\n");
         }
         else {
-            /* done */
-            break;
+            fprintf(stderr,
+                "Error: unexpected section [%s] in the main "
+                "configuration file.\n", section->name);
+        }
+        exit(EXIT_FAILURE);
+    }
+
+    /* Read main [SERVICE] section */
+    section = mk_rconf_section_get(fconf, "SERVICE");
+    if (section) {
+        /* Iterate properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            /* Set the property */
+            flb_config_set_property(config, entry->key, entry->val);
         }
     }
 
-    *out = buf;
-    *out_size = off;
-    return 0;
+
+    /* Read all [INPUT] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "INPUT") != 0) {
+            continue;
+        }
+
+        /* Get the input plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        flb_debug("[service] loading input: %s", name);
+
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        in = flb_input_new(config, tmp, NULL);
+        mk_mem_free(name);
+        if (!in) {
+            fprintf(stderr, "Input plugin '%s' cannot be loaded\n", tmp);
+            mk_mem_free(tmp);
+            goto flb_service_conf_end;
+        }
+        mk_mem_free(tmp);
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            ret = flb_input_set_property(in, entry->key, entry->val);
+            if (ret == -1) {
+                fprintf(stderr, "Error setting up %s plugin property '%s'\n",
+                    in->name, entry->key);
+                goto flb_service_conf_end;
+            }
+        }
+    }
+
+    /* Read all [OUTPUT] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "OUTPUT") != 0) {
+            continue;
+        }
+
+        /* Get the output plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        out = flb_output_new(config, tmp, NULL);
+        mk_mem_free(name);
+        if (!out) {
+            fprintf(stderr, "Output plugin '%s' cannot be loaded\n", tmp);
+            mk_mem_free(tmp);
+            goto flb_service_conf_end;
+        }
+        mk_mem_free(tmp);
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            flb_output_set_property(out, entry->key, entry->val);
+        }
+    }
+
+    /* Read all [FILTER] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "FILTER") != 0) {
+            continue;
+        }
+        /* Get the filter plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        filter = flb_filter_new(config, tmp, NULL);
+        mk_mem_free(tmp);
+        mk_mem_free(name);
+        if (!filter) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            flb_filter_set_property(filter, entry->key, entry->val);
+        }
+    }
+
+    ret = 0;
+
+flb_service_conf_end:
+    if (fconf != NULL) {
+        mk_rconf_free(fconf);
+    }
+    return ret;
 }

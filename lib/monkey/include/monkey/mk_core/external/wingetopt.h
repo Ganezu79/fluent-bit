@@ -21,7 +21,7 @@ extern int optopt;
 extern char *optarg;
 extern int getopt(int argc, char **argv, char *opts);
 
-#define getopt_long(a, b, c, d, e) getopt(a, b, c)
+
 
 #ifdef __cplusplus
 }

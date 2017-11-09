@@ -547,19 +547,11 @@ struct flb_http_client *flb_http_client(struct flb_upstream_conn *u_conn,
 int flb_http_buffer_size(struct flb_http_client *c, size_t size)
 {
     if (size < c->resp.data_size_max && size != 0) {
-        flb_error("[http] requested buffer size %lu cannot exceed"
-                  "maximum size %lu",
-                  c->resp.data_size, c->resp.data_size_max);
         return -1;
     }
 
     c->resp.data_size_max = size;
     return 0;
-}
-
-size_t flb_http_buffer_available(struct flb_http_client *c)
-{
-    return (c->resp.data_size - c->resp.data_len);
 }
 
 /*
@@ -584,9 +576,8 @@ int flb_http_buffer_increase(struct flb_http_client *c, size_t size,
     /* Limit exceeded, adjust */
     if (c->resp.data_size_max != 0) {
         if (new_size > c->resp.data_size_max) {
-            new_size = c->resp.data_size_max;
-            if (new_size <= c->resp.data_size) {
-                /* Can't expand the buffer any further. */
+            new_size = c->resp.data_size_max - c->resp.data_size;
+            if (new_size <= 0) {
                 return -1;
             }
         }
@@ -745,9 +736,9 @@ int flb_http_do(struct flb_http_client *c, size_t *bytes)
 {
     int ret;
     int r_bytes;
+    int available;
     int crlf = 2;
     int new_size;
-    ssize_t available;
     size_t out_size;
     size_t bytes_header = 0;
     size_t bytes_body = 0;
@@ -793,14 +784,13 @@ int flb_http_do(struct flb_http_client *c, size_t *bytes)
     /* Read the server response, we need at least 19 bytes */
     c->resp.data_len = 0;
     while (1) {
-        available = flb_http_buffer_available(c) - 1;
+        available = (c->resp.data_size - 1 - c->resp.data_len);
         if (available <= 1) {
             /*
              * If there is no more space available on our buffer, try to
              * increase it.
              */
-            ret = flb_http_buffer_increase(c, FLB_HTTP_DATA_CHUNK,
-                                           &out_size);
+            ret = flb_http_buffer_increase(c, FLB_HTTP_DATA_CHUNK, &out_size);
             if (ret == -1) {
                 /*
                  * We could not allocate more space, let the caller handle
@@ -808,12 +798,12 @@ int flb_http_do(struct flb_http_client *c, size_t *bytes)
                  */
                 return 0;
             }
-            available = flb_http_buffer_available(c) - 1;
+            available = (c->resp.data_size - 1 - c->resp.data_len);
         }
 
         r_bytes = flb_io_net_read(c->u_conn,
-                                  c->resp.data + c->resp.data_len,
-                                  available);
+                                 c->resp.data + c->resp.data_len,
+                                 available);
         if (r_bytes <= 0) {
             if (c->flags & FLB_HTTP_10) {
                 break;

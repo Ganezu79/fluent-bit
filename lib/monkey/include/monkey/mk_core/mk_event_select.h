@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #ifndef MK_EVENT_SELECT_H
 #define MK_EVENT_SELECT_H
 
-#ifdef _WIN32
+#if defined(_WIN64) || defined(_WIN32)
 #include <Winsock2.h>
 #else
 #include <sys/select.h>

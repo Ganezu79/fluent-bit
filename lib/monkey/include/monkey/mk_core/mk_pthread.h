@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+ *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 
 #if defined (MK_THREADS_POSIX)    /* Heaven */
 #include <pthread.h>
-#elif defined (MK_THREADS_WIN32)  /* Not Heaven */
+#elif defined (MK_THREADS_WIN32) || defined (MK_THREADS_WIN64)  /* Not Heaven */
 #include "external/winpthreads.h"
 #endif
 
