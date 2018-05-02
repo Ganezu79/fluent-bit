@@ -17,7 +17,7 @@ RUN rm -rf /tmp/src/build/*
 RUN apt-get update && apt-get dist-upgrade -y && apt-get install -y build-essential cmake make wget unzip libsystemd-dev libssl1.0-dev libasl-dev
 
 WORKDIR /tmp/src/build/
-RUN cmake -DFLB_DEBUG=Off \
+RUN cmake -DFLB_DEBUG=On \
           -DFLB_TRACE=Off \
           -DFLB_JEMALLOC=On \
           -DFLB_BUFFERING=On \
@@ -28,8 +28,15 @@ RUN cmake -DFLB_DEBUG=Off \
           -DFLB_OUT_KAFKA=On ..
 RUN make
 RUN install bin/fluent-bit /fluent-bit/bin/
+
 # Configuration files
-COPY conf/fluent-bit.conf conf/parsers.conf conf/parsers_java.conf /fluent-bit/etc/
+COPY conf/fluent-bit.conf \
+     conf/parsers.conf \
+     conf/parsers_java.conf \
+     conf/parsers_mult.conf \
+     conf/parsers_openstack.conf \
+     conf/parsers_cinder.conf \
+     /fluent-bit/etc/
 
 FROM gcr.io/google-containers/debian-base-amd64:0.3
 MAINTAINER Eduardo Silva <eduardo@treasure-data.com>
