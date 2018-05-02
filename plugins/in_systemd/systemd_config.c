@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -139,7 +139,6 @@ struct flb_systemd_config *flb_systemd_config_create(struct flb_input_instance *
     tmp = flb_input_get_property("read_from_tail", i_ins);
     if (tmp != NULL && flb_utils_bool(tmp)) {
         sd_journal_seek_tail(ctx->j);
-
         /* Skip last entry */
         sd_journal_next_skip(ctx->j, 1);
     }

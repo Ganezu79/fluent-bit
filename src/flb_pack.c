@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 
 #include <fluent-bit/flb_info.h>
 #include <fluent-bit/flb_mem.h>
+#include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_error.h>
 #include <fluent-bit/flb_utils.h>
 #include <fluent-bit/flb_pack.h>
@@ -95,6 +96,10 @@ static char *tokens_to_msgpack(char *js,
     msgpack_packer pck;
     msgpack_sbuffer sbuf;
 
+    if (arr_size == 0) {
+        return NULL;
+    }
+
     /* initialize buffers */
     msgpack_sbuffer_init(&sbuf);
     msgpack_packer_init(&pck, &sbuf, msgpack_sbuffer_write);
@@ -111,7 +116,6 @@ static char *tokens_to_msgpack(char *js,
         }
 
         flen = (t->end - t->start);
-
         switch (t->type) {
         case JSMN_OBJECT:
             msgpack_pack_map(&pck, t->size);
@@ -172,11 +176,11 @@ static char *tokens_to_msgpack(char *js,
  * This routine do not keep a state in the parser, do not use it for big
  * JSON messages.
  */
-int flb_pack_json(char *js, size_t len, char **buffer, int *size)
+int flb_pack_json(char *js, size_t len, char **buffer, size_t *size)
 {
     int ret = -1;
     int out;
-    char *buf;
+    char *buf = NULL;
     struct flb_pack_state state;
 
     ret = flb_pack_state_init(&state);
@@ -206,6 +210,20 @@ int flb_pack_json(char *js, size_t len, char **buffer, int *size)
     return ret;
 }
 
+int flb_pack_json_valid(char *json, size_t len)
+{
+    int ret;
+    jsmn_parser parser;
+
+    jsmn_init(&parser);
+    ret = jsmn_parse(&parser, json, len, NULL, 0);
+    if (ret <= 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
 /* Initialize a JSON packer state */
 int flb_pack_state_init(struct flb_pack_state *s)
 {
@@ -214,7 +232,7 @@ int flb_pack_state_init(struct flb_pack_state *s)
     jsmn_init(&s->parser);
     s->tokens = flb_calloc(1, sizeof(jsmntok_t) * size);
     if (!s->tokens) {
-        perror("calloc");
+        flb_errno();
         return -1;
     }
     s->tokens_size   = size;
@@ -638,6 +656,53 @@ int flb_msgpack_to_json(char *json_str, size_t json_size,
     ret = msgpack2json(json_str, &off, json_size, obj);
     json_str[off] = '\0';
     return ret ? off: ret;
+}
+
+flb_sds_t flb_msgpack_raw_to_json_sds(void *in_buf, size_t in_size)
+{
+    int ret;
+    size_t off = 0;
+    size_t out_size;
+    msgpack_unpacked result;
+    msgpack_object *root;
+    flb_sds_t out_buf;
+    flb_sds_t tmp_buf;
+
+    out_size = in_size * 1.5;
+    out_buf = flb_sds_create_size(out_size);
+    if (!out_buf) {
+        flb_errno();
+        return NULL;
+    }
+
+    msgpack_unpacked_init(&result);
+    msgpack_unpack_next(&result, in_buf, in_size, &off);
+    root = &result.data;
+
+    while (1) {
+        ret = flb_msgpack_to_json(out_buf, out_size, root);
+        if (ret <= 0) {
+            tmp_buf = flb_sds_increase(out_buf, 256);
+            if (tmp_buf) {
+                out_buf = tmp_buf;
+                out_size += 256;
+            }
+            else {
+                flb_errno();
+                flb_sds_destroy(out_buf);
+                msgpack_unpacked_destroy(&result);
+                return NULL;
+            }
+        }
+        else {
+            break;
+        }
+    }
+
+    msgpack_unpacked_destroy(&result);
+    flb_sds_len_set(out_buf, ret);
+
+    return out_buf;
 }
 
 /**

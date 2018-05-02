@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -125,6 +125,9 @@ struct flb_config {
     /* Parser Conf */
     char *parsers_file;
 
+    /* Plugins config file */
+    char *plugins_file;
+
     /* Environment */
     void *env;
 
@@ -190,14 +193,19 @@ enum conf_type {
 #define FLB_CONF_STR_LOGFILE  "Log_File"
 #define FLB_CONF_STR_LOGLEVEL "Log_Level"
 #define FLB_CONF_STR_PARSERS_FILE "Parsers_File"
+#define FLB_CONF_STR_PLUGINS_FILE "Plugins_File"
 #ifdef FLB_HAVE_HTTP
 #define FLB_CONF_STR_HTTP_MONITOR "HTTP_Monitor"
+#define FLB_CONF_STR_PLUGINS_FILE "Plugins_File"
+#ifdef FLB_HAVE_HTTP_SERVER
+#define FLB_CONF_STR_HTTP_SERVER  "HTTP_Server"
+#define FLB_CONF_STR_HTTP_LISTEN  "HTTP_Listen"
 #define FLB_CONF_STR_HTTP_PORT    "HTTP_Port"
 #endif /* FLB_HAVE_HTTP */
 #ifdef FLB_HAVE_BUFFERING
 #define FLB_CONF_STR_BUF_PATH     "Buffer_Path"
 #define FLB_CONF_STR_BUF_WORKERS  "Buffer_Workers"
 #endif /*FLB_HAVE_BUFFERING*/
-
+#endif /*FLB_HAVE_HTTP*/
 
 #endif

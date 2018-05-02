@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -41,7 +41,12 @@ int influxdb_bulk_append_header(struct influxdb_bulk *bulk,
 int influxdb_bulk_append_kv(struct influxdb_bulk *bulk,
                             char *key, int k_len,
                             char *val, int v_len,
-                            int more, int quote);
+                            int quote);
+
+int influxdb_bulk_append_bulk(struct influxdb_bulk *bulk_to,
+                              struct influxdb_bulk *bulk_from,
+                              char separator);
+
 void influxdb_bulk_destroy(struct influxdb_bulk *bulk);
 int influxdb_bulk_append_timestamp(struct influxdb_bulk *bulk,
                                    struct flb_time *t);

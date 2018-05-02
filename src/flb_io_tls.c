@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -118,6 +118,7 @@ struct flb_tls_context *flb_tls_context_new(int verify,
         ret = mbedtls_x509_crt_parse_path(&ctx->ca_cert, ca_path);
         if (ret < 0) {
             io_tls_error(ret);
+            flb_error("[TLS] error reading certificates from /etc/ssl/certs/");
             goto error;
         }
     }
@@ -350,7 +351,6 @@ int flb_io_tls_net_read(struct flb_thread *th, struct flb_upstream_conn *u_conn,
                         void *buf, size_t len)
 {
     int ret;
-    struct flb_upstream *u = u_conn->u;
 
  retry_read:
     ret = mbedtls_ssl_read(&u_conn->tls_session->ssl, buf, len);
@@ -364,11 +364,10 @@ int flb_io_tls_net_read(struct flb_thread *th, struct flb_upstream_conn *u_conn,
         char err_buf[72];
         mbedtls_strerror(ret, err_buf, sizeof(err_buf));
         flb_error("[tls] SSL error: %s", err_buf);
-
-        /* There was an error transmitting data */
-        mk_event_del(u->evl, &u_conn->event);
-        flb_tls_session_destroy(u_conn->tls_session);
-        u_conn->tls_session = NULL;
+        return -1;
+    }
+    else if (ret == 0) {
+        flb_debug("[tls] SSL connection closed by peer");
         return -1;
     }
 
@@ -402,16 +401,8 @@ int flb_io_tls_net_write(struct flb_thread *th, struct flb_upstream_conn *u_conn
         char err_buf[72];
         mbedtls_strerror(ret, err_buf, sizeof(err_buf));
         flb_error("[tls] SSL error: %s", err_buf);
-
-        /* There was an error transmitting data */
-        mk_event_del(u->evl, &u_conn->event);
-        flb_tls_session_destroy(u_conn->tls_session);
-        u_conn->tls_session = NULL;
         return -1;
     }
-
-    /* Update statistics */
-    //flb_stats_update(out->stats_fd, ret, 0);
 
     /* Update counter and check if we need to continue writing */
     total += ret;

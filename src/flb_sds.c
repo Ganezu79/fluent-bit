@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ flb_sds_t flb_sds_increase(flb_sds_t s, size_t len)
 {
     size_t avail;
     size_t new_size;
-    struct flb_sds *cur;
+    struct flb_sds *head;
     void *tmp;
 
     avail = flb_sds_avail(s);
@@ -97,17 +97,17 @@ flb_sds_t flb_sds_increase(flb_sds_t s, size_t len)
         return s;
     }
 
-    new_size = (FLB_SDS_HEADER_SIZE + flb_sds_len(s) + len + 1);
-    cur = FLB_SDS_HEADER(s);
-    tmp = flb_realloc(cur, new_size);
+    new_size = (FLB_SDS_HEADER_SIZE + flb_sds_alloc(s) + len + 1);
+    head = FLB_SDS_HEADER(s);
+    tmp = flb_realloc(head, new_size);
     if (!tmp) {
         flb_errno();
         return NULL;
     }
+    head = tmp;
+    head->alloc += len;
+    s = head->buf;
 
-    cur = tmp;
-    cur->alloc += len;
-    s = cur->buf;
     return s;
 }
 
@@ -115,7 +115,7 @@ flb_sds_t flb_sds_cat(flb_sds_t s, char *str, int len)
 {
     size_t avail;
     struct flb_sds *head;
-    flb_sds_t tmp;
+    flb_sds_t tmp = NULL;
 
     avail = flb_sds_avail(s);
     if (avail < len) {
@@ -125,10 +125,33 @@ flb_sds_t flb_sds_cat(flb_sds_t s, char *str, int len)
         }
         s = tmp;
     }
+    memcpy((char *) (s + flb_sds_len(s)), str, len);
 
     head = FLB_SDS_HEADER(s);
-    memcpy(s + flb_sds_len(s), str, len);
     head->len += len;
+    s[head->len] = '\0';
+
+    return s;
+}
+
+flb_sds_t flb_sds_copy(flb_sds_t s, char *str, int len)
+{
+    size_t avail;
+    struct flb_sds *head;
+    flb_sds_t tmp = NULL;
+
+    avail = flb_sds_alloc(s);
+    if (avail < len) {
+        tmp = flb_sds_increase(s, len);
+        if (!tmp) {
+            return NULL;
+        }
+        s = tmp;
+    }
+    memcpy((char *) s, str, len);
+
+    head = FLB_SDS_HEADER(s);
+    head->len = len;
     s[head->len] = '\0';
 
     return s;

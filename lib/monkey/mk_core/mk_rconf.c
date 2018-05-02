@@ -1,21 +1,21 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 
 /*  Monkey HTTP Server
- *  ==================
- *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- */
+*  ==================
+*  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
+*
+*  Licensed under the Apache License, Version 2.0 (the "License");
+*  you may not use this file except in compliance with the License.
+*  You may obtain a copy of the License at
+*
+*      http://www.apache.org/licenses/LICENSE-2.0
+*
+*  Unless required by applicable law or agreed to in writing, software
+*  distributed under the License is distributed on an "AS IS" BASIS,
+*  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+*  See the License for the specific language governing permissions and
+*  limitations under the License.
+*/
 
 #include <ctype.h>
 #include <string.h>
@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #if !defined(_WIN32) && !defined(_WIN64)
 #include <unistd.h>
+#include <glob.h>
 #else
 #define PATH_MAX 1024
 #endif
@@ -46,14 +47,14 @@ static void mk_config_error(const char *path, int line, const char *msg)
 static void mk_rconf_warning(const char *path, int line, const char *msg)
 {
     mk_warn("Config file warning '%s':\n"
-            "\t\t\t\tat line %i: %s",
-            path, line, msg);
+        "\t\t\t\tat line %i: %s",
+        path, line, msg);
 }
 
 
 /* Returns a configuration section by [section name] */
 struct mk_rconf_section *mk_rconf_section_get(struct mk_rconf *conf,
-                                              const char *name)
+    const char *name)
 {
     struct mk_list *head;
     struct mk_rconf_section *section;
@@ -70,7 +71,7 @@ struct mk_rconf_section *mk_rconf_section_get(struct mk_rconf *conf,
 
 /* Register a key/value entry in the last section available of the struct */
 static void mk_rconf_section_entry_add(struct mk_rconf *conf,
-                                       const char *key, const char *val)
+    const char *key, const char *val)
 {
     struct mk_rconf_section *section;
     struct mk_rconf_entry *new;
@@ -166,6 +167,11 @@ static int mk_rconf_meta_add(struct mk_rconf *conf, char *buf, int len)
     return 0;
 }
 
+#if !defined(_WIN32) && !defined(_WIN64)
+/* To call this function from mk_rconf_read */
+static int mk_rconf_read_glob(struct mk_rconf *conf, const char * path);
+#endif
+
 static int mk_rconf_read(struct mk_rconf *conf, const char *path)
 {
     int i;
@@ -179,7 +185,7 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
     char *section = NULL;
     char *indent = NULL;
     char *key, *val;
-    char *cfg_file = (char *) path;
+    char *cfg_file = (char *)path;
     struct stat st;
     struct mk_rconf_file *file;
     struct mk_rconf_section *current = NULL;
@@ -239,7 +245,15 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
         }
 
         if (len > 9 && strncasecmp(buf, "@INCLUDE ", 9) == 0) {
-            ret = mk_rconf_read(conf, buf + 9);
+#if !defined(_WIN32) && !defined(_WIN64)
+            if (strchr(buf + 9, '*') != NULL) {
+                ret = mk_rconf_read_glob(conf, buf + 9);
+            }
+            else
+#endif
+            {
+                ret = mk_rconf_read(conf, buf + 9);
+            }
             if (ret == -1) {
                 conf->level--;
                 fclose(f);
@@ -268,9 +282,9 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
             end = mk_string_char_search(buf, ']', len);
             if (end > 0) {
                 /*
-                 * Before to add a new section, lets check the previous
-                 * one have at least one key set
-                 */
+                * Before to add a new section, lets check the previous
+                * one have at least one key set
+                */
                 if (current && n_keys == 0) {
                     mk_rconf_warning(path, line, "Previous section did not have keys");
                 }
@@ -325,6 +339,10 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
         mk_string_trim(&key);
         mk_string_trim(&val);
 
+        if (strlen(val) == 0) {
+            mk_config_error(path, line, "Key has an empty value");
+        }
+
         /* Register entry: key and val are copied as duplicated */
         mk_rconf_section_entry_add(conf, key, val);
 
@@ -345,13 +363,13 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
 
     s = conf->section;
     while(s) {
-        printf("\n[%s]", s->name);
-        e = s->entry;
-        while(e) {
-            printf("\n   %s = %s", e->key, e->val);
-            e = e->next;
-        }
-        s = s->next;
+    printf("\n[%s]", s->name);
+    e = s->entry;
+    while(e) {
+    printf("\n   %s = %s", e->key, e->val);
+    e = e->next;
+    }
+    s = s->next;
     }
     fflush(stdout);
     */
@@ -374,6 +392,55 @@ static int mk_rconf_read(struct mk_rconf *conf, const char *path)
     return 0;
 }
 
+#if !defined(_WIN32) && !defined(_WIN64)
+static int mk_rconf_read_glob(struct mk_rconf *conf, const char * path)
+{
+    int ret = -1;
+    glob_t glb;
+    char tmp[PATH_MAX];
+
+    const char *glb_path;
+    size_t i;
+    int ret_glb = -1;
+
+    if (conf->root_path) {
+        snprintf(tmp, PATH_MAX, "%s/%s", conf->root_path, path);
+        glb_path = tmp;
+    }
+    else {
+        glb_path = path;
+    }
+
+    ret_glb = glob(glb_path, GLOB_NOSORT, NULL, &glb);
+    if (ret_glb != 0) {
+        switch (ret_glb) {
+        case GLOB_NOSPACE:
+            mk_warn("[%s] glob: no space", __FUNCTION__);
+            break;
+        case GLOB_NOMATCH:
+            mk_warn("[%s] glob: no match", __FUNCTION__);
+            break;
+        case GLOB_ABORTED:
+            mk_warn("[%s] glob: aborted", __FUNCTION__);
+            break;
+        default:
+            mk_warn("[%s] glob: other error", __FUNCTION__);
+        }
+        return ret;
+    }
+
+    for (i = 0; i < glb.gl_pathc; i++) {
+        ret = mk_rconf_read(conf, glb.gl_pathv[i]);
+        if (ret < 0) {
+            break;
+        }
+    }
+
+    globfree(&glb);
+    return ret;
+}
+#endif
+
 static int mk_rconf_path_set(struct mk_rconf *conf, char *file)
 {
     char *p;
@@ -385,7 +452,7 @@ static int mk_rconf_path_set(struct mk_rconf *conf, char *file)
     if (!p) {
         return -1;
     }
-#else    
+#else
     DWORD  retval = 0;
 
     retval = GetFullPathName(file, PATH_MAX + 1, path, NULL);
@@ -428,7 +495,7 @@ struct mk_rconf *mk_rconf_open(const char *path)
     mk_list_init(&conf->metas);
 
     /* Set the absolute path for the entrypoint file */
-    mk_rconf_path_set(conf, (char *) path);
+    mk_rconf_path_set(conf, (char *)path);
 
     /* Read entrypoint */
     ret = mk_rconf_read(conf, path);
@@ -502,7 +569,7 @@ void mk_rconf_free_entries(struct mk_rconf_section *section)
 
 /* Register a new section into the configuration struct */
 struct mk_rconf_section *mk_rconf_section_add(struct mk_rconf *conf,
-                                              char *name)
+    char *name)
 {
     struct mk_rconf_section *new;
 
@@ -517,7 +584,7 @@ struct mk_rconf_section *mk_rconf_section_add(struct mk_rconf *conf,
 
 /* Return the value of a key of a specific section */
 void *mk_rconf_section_get_key(struct mk_rconf_section *section,
-                               char *key, int mode)
+    char *key, int mode)
 {
     int on, off;
     struct mk_rconf_entry *entry;
@@ -529,21 +596,21 @@ void *mk_rconf_section_get_key(struct mk_rconf_section *section,
         if (strcasecmp(entry->key, key) == 0) {
             switch (mode) {
             case MK_RCONF_STR:
-                return (void *) mk_string_dup(entry->val);
+                return (void *)mk_string_dup(entry->val);
             case MK_RCONF_NUM:
-                return (void *) strtol(entry->val, (char **) NULL, 10);
+                return (void *)strtol(entry->val, (char **)NULL, 10);
             case MK_RCONF_BOOL:
                 on = strcasecmp(entry->val, MK_RCONF_ON);
                 off = strcasecmp(entry->val, MK_RCONF_OFF);
 
                 if (on != 0 && off != 0) {
-                    return (void *) -1;
+                    return (void *)-1;
                 }
                 else if (on >= 0) {
-                    return (void *) MK_TRUE;
+                    return (void *)MK_TRUE;
                 }
                 else {
-                    return (void *) MK_FALSE;
+                    return (void *)MK_FALSE;
                 }
             case MK_RCONF_LIST:
                 return (void *)mk_string_split_line(entry->val);

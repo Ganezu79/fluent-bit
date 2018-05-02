@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 
 #include "tail_config.h"
 #include "tail_file.h"
+#include "tail_db.h"
 #include "tail_signal.h"
 
 #include <limits.h>
@@ -38,6 +39,7 @@ static int tail_fs_event(struct flb_input_instance *i_ins,
                          struct flb_config *config, void *in_context)
 {
     int ret;
+    off_t offset;
     struct mk_list *head;
     struct mk_list *tmp;
     struct flb_tail_config *ctx = in_context;
@@ -70,8 +72,24 @@ static int tail_fs_event(struct flb_input_instance *i_ins,
         flb_tail_file_rotated(file);
     }
 
-    /* File was removed */
-    if (ev.mask & (IN_ATTRIB | IN_IGNORED)) {
+    /* File was removed ? */
+    if (ev.mask & IN_ATTRIB) {
+        ret = fstat(file->fd, &st);
+        if (ret == -1) {
+            flb_debug("[in_tail] error stat(2) %s, removing", file->name);
+            flb_tail_file_remove(file);
+            return 0;
+        }
+
+        /* Check if the file have been deleted */
+        if (st.st_nlink == 0) {
+            flb_debug("[in_tail] removed %s", file->name);
+            flb_tail_file_remove(file);
+            return 0;
+        }
+    }
+
+    if (ev.mask & IN_IGNORED) {
         flb_debug("[in_tail] removed %s", file->name);
         flb_tail_file_remove(file);
         return 0;
@@ -86,6 +104,24 @@ static int tail_fs_event(struct flb_input_instance *i_ins,
         if (ret == -1) {
             flb_errno();
             return -1;
+        }
+
+        /* Check if the file was truncated */
+        if (file->offset > st.st_size) {
+            offset = lseek(file->fd, 0, SEEK_SET);
+            if (offset == -1) {
+                flb_errno();
+                return -1;
+            }
+
+            flb_debug("[in_tail] truncated %s", file->name);
+            file->offset = offset;
+            file->buf_len = 0;
+
+            /* Update offset in the database file */
+            if (ctx->db) {
+                flb_tail_db_file_offset(file, ctx);
+            }
         }
 
         /* Collect the data */

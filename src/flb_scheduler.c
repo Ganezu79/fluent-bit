@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ static inline int consume_byte(flb_pipefd_t fd)
     /* We need to consume the byte */
     ret = flb_pipe_r(fd, &val, sizeof(val));
     if (ret <= 0) {
-        perror("read");
+        flb_errno();
         return -1;
     }
 
@@ -171,7 +171,7 @@ static int schedule_request_promote(struct flb_sched *sched)
         else {
             /* Check if we should schedule within this frame */
             if (passed + FLB_SCHED_REQUEST_FRAME >= request->timeout) {
-                next = abs(passed - request->timeout);
+                next = labs(passed - request->timeout);
                 mk_list_del(&request->_head);
                 schedule_request_now(next, request->timer, request, sched->config);
             }
@@ -252,15 +252,23 @@ int flb_sched_request_destroy(struct flb_config *config,
 {
     struct flb_sched_timer *timer;
 
-    flb_pipe_close(req->fd);
     mk_list_del(&req->_head);
 
     timer = req->timer;
     if (config->evl && timer->event.mask != MK_EVENT_EMPTY) {
         mk_event_del(config->evl, &timer->event);
     }
+    flb_pipe_close(req->fd);
 
-    flb_sched_timer_destroy(timer);
+    /*
+     * We invalidate the timer since in the same event loop round
+     * an event associated to this timer can be present. Invalidation
+     * means the timer will do nothing and will be removed after
+     * the event loop round finish.
+     */
+    flb_sched_timer_invalidate(timer);
+
+    /* Remove request */
     flb_free(req);
 
     return 0;
@@ -293,6 +301,10 @@ int flb_sched_event_handler(struct flb_config *config, struct mk_event *event)
     struct flb_sched_request *req;
 
     timer = (struct flb_sched_timer *) event;
+    if (timer->active == FLB_FALSE) {
+        return 0;
+    }
+
     if (timer->type == FLB_SCHED_TIMER_REQUEST) {
         /* Map request struct */
         req = timer->data;
@@ -306,10 +318,91 @@ int flb_sched_event_handler(struct flb_config *config, struct mk_event *event)
     }
     else if (timer->type == FLB_SCHED_TIMER_FRAME) {
         sched = timer->data;
+#ifndef __APPLE__
         consume_byte(sched->frame_fd);
+#endif
         schedule_request_promote(sched);
     }
+    else if (timer->type == FLB_SCHED_TIMER_CUSTOM) {
+        consume_byte(timer->timer_fd);
+        flb_sched_timer_cb_disable(timer);
+        timer->cb(config, timer->data);
+        flb_sched_timer_cb_destroy(timer);
+    }
 
+    return 0;
+}
+
+/*
+ * Create a timer that once it expire, it triggers the defined callback
+ * upon creation. This interface is for generic purposes and not specific
+ * for re-tries.
+ *
+ * use-case: invoke function A() after M milliseconds.
+ */
+int flb_sched_timer_cb_create(struct flb_config *config, int ms,
+                              void (*cb)(struct flb_config *, void *),
+                              void *data)
+{
+    int fd;
+    time_t sec;
+    long nsec;
+    struct mk_event *event;
+    struct flb_sched_timer *timer;
+
+    timer = flb_sched_timer_create(config->sched);
+    if (!timer) {
+        return -1;
+    }
+
+    timer->type = FLB_SCHED_TIMER_CUSTOM;
+    timer->data = data;
+    timer->cb   = cb;
+
+    /* Initialize event */
+    event = &timer->event;
+    event->mask   = MK_EVENT_EMPTY;
+    event->status = MK_EVENT_NONE;
+
+    /* Convert from milliseconds to seconds and nanoseconds */
+    sec = (ms / 1000);
+    nsec = ((ms % 1000) * 1000000);
+
+    /* Create the frame timer */
+    fd = mk_event_timeout_create(config->evl, sec, nsec, event);
+    if (fd == -1) {
+        flb_error("[sched] cannot do timeout_create()");
+        flb_sched_timer_destroy(timer);
+        return -1;
+    }
+
+    /*
+     * Note: mk_event_timeout_create() sets a type = MK_EVENT_NOTIFICATION by
+     * default, we need to overwrite this value so we can do a clean check
+     * into the Engine when the event is triggered.
+     */
+    event->type = FLB_ENGINE_EV_SCHED;
+    timer->timer_fd = fd;
+
+    return 0;
+}
+
+/* Disable notifications, used before to destroy the context */
+int flb_sched_timer_cb_disable(struct flb_sched_timer *timer)
+{
+    int ret;
+
+    ret = close(timer->timer_fd);
+    timer->timer_fd = -1;
+    return ret;
+}
+
+int flb_sched_timer_cb_destroy(struct flb_sched_timer *timer)
+{
+    if (timer->timer_fd > 0) {
+        flb_sched_timer_cb_disable(timer);
+    }
+    flb_sched_timer_destroy(timer);
     return 0;
 }
 
@@ -333,6 +426,7 @@ int flb_sched_init(struct flb_config *config)
     mk_list_init(&sched->requests);
     mk_list_init(&sched->requests_wait);
     mk_list_init(&sched->timers);
+    mk_list_init(&sched->timers_drop);
 
     /* Create the frame timer who enqueue 'requests' for future time */
     timer = flb_sched_timer_create(sched);
@@ -405,6 +499,13 @@ int flb_sched_exit(struct flb_config *config)
         c++;
     }
 
+    /* Delete timers drop list */
+    mk_list_foreach_safe(head, tmp, &sched->timers_drop) {
+        timer = mk_list_entry(head, struct flb_sched_timer, _head);
+        flb_sched_timer_destroy(timer);
+        c++;
+    }
+
     flb_free(sched);
     return c;
 }
@@ -415,20 +516,59 @@ struct flb_sched_timer *flb_sched_timer_create(struct flb_sched *sched)
     struct flb_sched_timer *timer;
 
     /* Create timer context */
-    timer = flb_malloc(sizeof(struct flb_sched_timer));
+    timer = flb_calloc(1, sizeof(struct flb_sched_timer));
     if (!timer) {
         flb_errno();
         return NULL;
     }
+    timer->timer_fd = -1;
+    timer->config = sched->config;
+    timer->data = NULL;
 
+    /* Active timer (not invalidated) */
+    timer->active = FLB_TRUE;
     mk_list_add(&timer->_head, &sched->timers);
+
     return timer;
+}
+
+void flb_sched_timer_invalidate(struct flb_sched_timer *timer)
+{
+    struct flb_sched *sched;
+
+    sched  = timer->config->sched;
+
+    timer->active = FLB_FALSE;
+    mk_list_del(&timer->_head);
+    mk_list_add(&timer->_head, &sched->timers_drop);
 }
 
 /* Destroy a timer context */
 int flb_sched_timer_destroy(struct flb_sched_timer *timer)
 {
+    mk_event_timeout_destroy(timer->config->evl, &timer->event);
+    if (timer->timer_fd > 0) {
+        flb_sched_timer_cb_disable(timer);
+    }
+
     mk_list_del(&timer->_head);
     flb_free(timer);
     return 0;
+}
+
+/* Used by the engine to cleanup pending timers waiting to be destroyed */
+int flb_sched_timer_cleanup(struct flb_sched *sched)
+{
+    int c = 0;
+    struct mk_list *tmp;
+    struct mk_list *head;
+    struct flb_sched_timer *timer;
+
+    mk_list_foreach_safe(head, tmp, &sched->timers_drop) {
+        timer = mk_list_entry(head, struct flb_sched_timer, _head);
+        flb_sched_timer_destroy(timer);
+        c++;
+    }
+
+    return c;
 }

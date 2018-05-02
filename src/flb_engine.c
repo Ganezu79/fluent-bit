@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -169,7 +169,7 @@ static inline int flb_engine_manager(flb_pipefd_t fd, struct flb_config *config)
 #endif
             flb_task_retry_clean(task, out_th->parent);
             flb_output_thread_destroy_id(thread_id, task);
-            if (task->users == 0) {
+            if (task->users == 0 && mk_list_size(&task->retries) == 0) {
                 flb_task_destroy(task);
             }
         }
@@ -196,7 +196,7 @@ static inline int flb_engine_manager(flb_pipefd_t fd, struct flb_config *config)
                          task->id, out_th->id, out_th->o_ins->name);
 
                 flb_output_thread_destroy_id(thread_id, task);
-                if (task->users == 0) {
+                if (task->users == 0 && mk_list_size(&task->retries) == 0) {
                     flb_task_destroy(task);
                 }
 
@@ -219,7 +219,7 @@ static inline int flb_engine_manager(flb_pipefd_t fd, struct flb_config *config)
                 flb_warn("[sched] retry for task %i could not be scheduled",
                          task->id);
                 flb_task_retry_destroy(retry);
-                if (task->users == 0) {
+                if (task->users == 0 && mk_list_size(&task->retries) == 0) {
                     flb_task_destroy(task);
                 }
             }
@@ -230,7 +230,7 @@ static inline int flb_engine_manager(flb_pipefd_t fd, struct flb_config *config)
         }
         else if (ret == FLB_ERROR) {
             flb_output_thread_destroy_id(thread_id, task);
-            if (task->users == 0) {
+            if (task->users == 0 && mk_list_size(&task->retries) == 0) {
                 flb_task_destroy(task);
             }
         }
@@ -275,12 +275,6 @@ static FLB_INLINE int flb_engine_handle_event(flb_pipefd_t fd, int mask,
             flb_utils_pipe_byte_consume(fd);
             return FLB_ENGINE_SHUTDOWN;
         }
-#ifdef FLB_HAVE_STATS
-        else if (config->stats_fd == fd) {
-            flb_utils_timer_consume(fd);
-            return FLB_ENGINE_STATS;
-        }
-#endif
         else if (config->ch_manager[0] == fd) {
             ret = flb_engine_manager(fd, config);
             if (ret == FLB_ENGINE_STOP) {
@@ -366,7 +360,7 @@ int flb_engine_start(struct flb_config *config)
         return -1;
     }
 
-    flb_info("[engine] started");
+    flb_info("[engine] started (pid=%i)", getpid());
     flb_thread_prepare();
 
     /* Create the event loop and set it in the global configuration */
@@ -496,13 +490,12 @@ int flb_engine_start(struct flb_config *config)
                 }
                 else if (ret == FLB_ENGINE_SHUTDOWN) {
                     flb_info("[engine] service stopped");
+                    if (config->shutdown_fd > 0) {
+                        mk_event_timeout_destroy(config->evl,
+                                                 &config->event_shutdown);
+                    }
                     return flb_engine_shutdown(config);
                 }
-#ifdef FLB_HAVE_STATS
-                else if (ret == FLB_ENGINE_STATS) {
-                    //flb_stats_collect(config);
-                }
-#endif
             }
             else if (event->type & FLB_ENGINE_EV_SCHED) {
                 /* Event type registered by the Scheduler */
@@ -511,7 +504,6 @@ int flb_engine_start(struct flb_config *config)
             else if (event->type == FLB_ENGINE_EV_CUSTOM) {
                 event->handler(event);
             }
-#if defined (FLB_HAVE_FLUSH_LIBCO)
             else if (event->type == FLB_ENGINE_EV_THREAD) {
                 struct flb_upstream_conn *u_conn;
                 struct flb_thread *th;
@@ -525,14 +517,19 @@ int flb_engine_start(struct flb_config *config)
                 flb_trace("[engine] resuming thread=%p", th);
                 flb_thread_resume(th);
             }
-#endif
         }
+
+        /* Cleanup functions associated to events and timers */
+        flb_sched_timer_cleanup(config->sched);
     }
 }
 
 /* Release all resources associated to the engine */
 int flb_engine_shutdown(struct flb_config *config)
 {
+
+    config->is_running = FLB_FALSE;
+    flb_input_pause_all(config);
 
 #ifdef FLB_HAVE_BUFFERING
     if (config->buffer_ctx) {

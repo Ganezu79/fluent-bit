@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
+ *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -25,11 +25,13 @@
 #define MK_EVENT_H
 
 /* Events type family */
+#define MK_EVENT_UNMODIFIED     -1    /* keep old event type              */
 #define MK_EVENT_NOTIFICATION    0    /* notification channel (pipe)      */
 #define MK_EVENT_LISTENER        1    /* listener socket                  */
-#define MK_EVENT_CONNECTION      2    /* data on active connection        */
-#define MK_EVENT_CUSTOM          3    /* custom fd registered             */
-#define MK_EVENT_THREAD          4    /* thread-coroutine                 */
+#define MK_EVENT_FIFO            2    /* FIFO - Messaging                 */
+#define MK_EVENT_CONNECTION      3    /* data on active connection        */
+#define MK_EVENT_CUSTOM          4    /* custom fd registered             */
+#define MK_EVENT_THREAD          5    /* thread-coroutine                 */
 
 /* Event triggered for file descriptors  */
 #define MK_EVENT_EMPTY           0
@@ -117,6 +119,7 @@ int mk_event_add(struct mk_event_loop *loop, int fd,
 int mk_event_del(struct mk_event_loop *loop, struct mk_event *event);
 int mk_event_timeout_create(struct mk_event_loop *loop,
                             time_t sec, long nsec,void *data);
+int mk_event_timeout_destroy(struct mk_event_loop *loop, void *data);
 int mk_event_channel_create(struct mk_event_loop *loop,
                             int *r_fd, int *w_fd, void *data);
 int mk_event_wait(struct mk_event_loop *loop);

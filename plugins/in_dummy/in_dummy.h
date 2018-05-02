@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@
 
 #define DEFAULT_DUMMY_MESSAGE "{\"message\":\"dummy\"}"
 struct flb_in_dummy_config {
-    char*  dummy_message;
+    char *dummy_message;
     int    dummy_message_len;
 
-    char* ref_msgpack;
-    int   ref_msgpack_size;
+    char *ref_msgpack;
+    size_t ref_msgpack_size;
 };
 
 extern struct flb_input_plugin in_dummy_plugin;

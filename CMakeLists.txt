@@ -56,6 +56,12 @@ option(FLB_BUFFERING          "Enable buffering support"     No)
 option(FLB_POSIX_TLS          "Force POSIX thread storage"   No)
 option(FLB_WITHOUT_INOTIFY    "Disable inotify support"      No)
 option(FLB_SQLDB              "Enable SQL embedded DB"       No)
+option(FLB_HTTP_SERVER        "Enable HTTP Server"           No)
+if(NOT ${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+option(FLB_BACKTRACE          "Enable stacktrace support"   Yes)
+else()
+option(FLB_BACKTRACE          "Enable stacktrace support"   No)
+endif()
 
 # Metrics: Experimental Feature, disabled by default on 0.12 series
 # but enabled in the upcoming 0.13 release. Note that development
@@ -82,7 +88,11 @@ option(FLB_PROXY_GO           "Enable Go plugins support"   Yes)
 # Build-in Plugins
 option(FLB_IN_CPU          "Enable CPU input plugin"            Yes)
 option(FLB_IN_DISK         "Enable Disk input plugin"           Yes)
+if(NOT ${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 option(FLB_IN_FORWARD      "Enable Forward input plugin"        Yes)
+else()
+option(FLB_IN_FORWARD      "Enable Forward input plugin"        No)
+endif()
 option(FLB_IN_HEALTH       "Enable Health input plugin"         Yes)
 option(FLB_IN_HTTP         "Enable HTTP input plugin"            No)
 option(FLB_IN_MEM          "Enable Memory input plugin"         Yes)
@@ -121,15 +131,13 @@ else()
 option(FLB_OUT_TD          "Enable Treasure Data output plugin" No)
 endif()
 option(FLB_OUT_RETRY       "Enable Retry test output plugin"     No)
+option(FLB_OUT_SPLUNK      "Enable Splunk output plugin"        Yes)
 option(FLB_OUT_STDOUT      "Enable STDOUT output plugin"        Yes)
 option(FLB_OUT_LIB         "Enable library mode output plugin"  Yes)
 option(FLB_OUT_NULL        "Enable dev null output plugin"      Yes)
 option(FLB_OUT_FLOWCOUNTER "Enable flowcount output plugin"     Yes)
-if(NOT ${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-option(FLB_OUT_KAFKA_REST  "Enable Kafka Rest output plugin"    Yes)
-else()
 option(FLB_OUT_KAFKA_REST  "Enable Kafka Rest output plugin"    No)
-endif()
+
 option(FLB_FILTER_GREP     "Enable grep filter"                 Yes)
 option(FLB_FILTER_STDOUT   "Enable stdout filter"               Yes)
 option(FLB_FILTER_PARSER   "Enable parser filter"               Yes)
@@ -138,6 +146,7 @@ option(FLB_FILTER_KUBERNETES "Enable kubernetes filter"         Yes)
 else()
 option(FLB_FILTER_KUBERNETES "Enable kubernetes filter"         No)
 endif()
+option(FLB_FILTER_THROTTLE "Enable throttle filter"             Yes)
 option(FLB_FILTER_RECORD_MODIFIER "Enable record_modifier filter" Yes)
 
 # Enable all features
@@ -237,13 +246,24 @@ if(FLB_BUFFERING)
   add_subdirectory(lib/sha1)
 endif()
 
+# Runtime Tests (filter_kubernetes) requires HTTP Server
+if(FLB_TESTS_RUNTIME)
+  FLB_OPTION(FLB_HTTP_SERVER  ON)
+endif()
+
 # MK Core
 macro(MK_SET_OPTION option value)
   set(${option} ${value} CACHE "" INTERNAL FORCE)
 endmacro()
-MK_SET_OPTION(MK_SYSTEM_MALLOC      ON)
+MK_SET_OPTION(MK_SYSTEM_MALLOC  ON)
+MK_SET_OPTION(MK_DEBUG          ON)
 
-add_subdirectory(lib/monkey/mk_core EXCLUDE_FROM_ALL)
+# Build Monkey HTTP Server
+if(FLB_HTTP_SERVER)
+  add_subdirectory(lib/monkey/ EXCLUDE_FROM_ALL)
+else()
+  add_subdirectory(lib/monkey/mk_core EXCLUDE_FROM_ALL)
+endif()
 
 # SSL/TLS: add encryption support
 if(FLB_OUT_TD)
@@ -255,8 +275,8 @@ if(FLB_TLS)
   option(ENABLE_TESTING  OFF)
   option(ENABLE_PROGRAMS OFF)
   option(INSTALL_MBEDTLS_HEADERS OFF)
-  add_subdirectory(lib/mbedtls-2.5.1 EXCLUDE_FROM_ALL)
-  include_directories(lib/mbedtls-2.5.1/include)
+  add_subdirectory(lib/mbedtls-2.8.0 EXCLUDE_FROM_ALL)
+  include_directories(lib/mbedtls-2.8.0/include)
 endif()
 
 # Metrics
@@ -270,8 +290,8 @@ endif()
 
 if(FLB_SQLDB)
   FLB_DEFINITION(FLB_HAVE_SQLDB)
-  add_subdirectory(lib/sqlite-amalgamation-3200000)
-  include_directories(lib/sqlite-amalgamation-3200000)
+  add_subdirectory(lib/sqlite-amalgamation-3230000)
+  include_directories(lib/sqlite-amalgamation-3230000)
 endif()
 
 if(FLB_BUFFERING)
@@ -284,6 +304,12 @@ endif()
 
 if(FLB_STATS)
   FLB_DEFINITION(FLB_HAVE_STATS)
+endif()
+
+if(FLB_HTTP_SERVER)
+  FLB_OPTION(FLB_METRICS ON)
+  FLB_DEFINITION(FLB_HAVE_METRICS)
+  FLB_DEFINITION(FLB_HAVE_HTTP_SERVER)
 endif()
 
 FLB_DEFINITION(FLB_HAVE_FLUSH_LIBCO)
@@ -330,6 +356,17 @@ if(FLB_MTRACE)
   if(FLB_HAVE_MTRACE AND FLB_DEBUG)
     FLB_DEFINITION(FLB_HAVE_MTRACE)
   endif()
+endif()
+
+# timespec_get() support
+check_c_source_compiles("
+  #include <time.h>
+  int main() {
+     struct tm tm;
+     return timespec_get(&tm, TIME_UTC);
+  }" FLB_HAVE_TIMESPEC_GET)
+if(FLB_HAVE_TIMESPEC_GET)
+  FLB_DEFINITION(FLB_HAVE_TIMESPEC_GET)
 endif()
 
 if(FLB_TD)
@@ -379,9 +416,24 @@ else()
   FLB_OPTION(FLB_JEMALLOC OFF)
 endif()
 
+# LibBacktrace (friendly stacktrace support)
+# =========================================
+if(FLB_BACKTRACE)
+  FLB_DEFINITION(FLB_HAVE_LIBBACKTRACE)
+  ExternalProject_Add(backtrace
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib/libbacktrace-177940370/
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lib/libbacktrace-177940370/configure ${AUTOCONF_HOST_OPT} --prefix=<INSTALL_DIR> --enable-shared=no --enable-static=yes
+    BUILD_COMMAND ${MAKE}
+    )
+  add_library(libbacktrace STATIC IMPORTED GLOBAL)
+  set_target_properties(libbacktrace PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/backtrace-prefix/lib/libbacktrace.a")
+  add_dependencies(libbacktrace backtrace)
+  include_directories("${CMAKE_CURRENT_BINARY_DIR}/backtrace-prefix/include/")
+endif()
+
 # Onigmo (Regex Engine)
 # =====================
-if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")  
+if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
     if(FLB_REGEX)
       ExternalProject_Add(onigmo
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib/onigmo
@@ -428,16 +480,6 @@ if(NOT FLB_POSIX_TLS)
   if(FLB_HAVE_C_TLS)
     FLB_DEFINITION(FLB_HAVE_C_TLS)
   endif()
-endif()
-
-# setjmp
-check_c_source_compiles("
-    #include <setjmp.h>
-    int main() {
-        return 0;
-    }" FLB_HAVE_SETJMP)
-if(FLB_HAVE_SETJMP)
-  FLB_DEFINITION(FLB_HAVE_SETJMP)
 endif()
 
 # accept(4)

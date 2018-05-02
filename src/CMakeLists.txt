@@ -1,5 +1,3 @@
-set(CMAKE_C_VISIBILITY_PRESET hidden)
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 add_definitions(-DFLB_CORE=1)
 
 set(src
@@ -12,6 +10,7 @@ set(src
   flb_uri.c
   flb_hash.c
   flb_pack.c
+  flb_sds.c
   flb_sha1.c
   flb_pipe.c
   flb_meta.c
@@ -51,6 +50,7 @@ if(FLB_REGEX)
     flb_parser.c
     flb_parser_regex.c
     flb_parser_json.c
+    flb_parser_decoder.c
     )
 endif()
 
@@ -213,6 +213,10 @@ if(NOT FLB_WITHOUT_BIN)
 
   if(FLB_JEMALLOC)
     target_link_libraries(fluent-bit-bin libjemalloc)
+  endif()
+
+  if(FLB_BACKTRACE)
+    target_link_libraries(fluent-bit-bin libbacktrace)
   endif()
 
   target_link_libraries(fluent-bit-bin fluent-bit-static ${CMAKE_THREAD_LIBS_INIT})

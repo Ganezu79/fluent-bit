@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -50,4 +50,6 @@
 #define SQL_ROTATE_FILE                         \
     "UPDATE in_tail_files set name='%s',rotated=1 WHERE id=%"PRId64";"
 
+#define SQL_PRAGMA_SYNC                         \
+    "PRAGMA synchronous=%i;"
 #endif

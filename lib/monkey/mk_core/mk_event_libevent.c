@@ -227,6 +227,20 @@ static inline int _mk_event_timeout_create(struct mk_event_ctx *ctx,
     return fd[0];
 }
 
+static inline int _mk_event_timeout_destroy(struct mk_event_ctx *ctx, void *data)
+{
+    int fd;
+    struct mk_event *event;
+
+    event = (struct mk_event *) data;
+
+    fd = event->fd;
+    _mk_event_del(ctx, event);
+
+    close(fd);
+    return 0;
+}
+
 static inline int _mk_event_channel_create(struct mk_event_ctx *ctx,
                                            int *r_fd, int *w_fd, void *data)
 {

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -98,9 +98,16 @@ static int in_systemd_collect(struct flb_input_instance *i_ins,
     msgpack_sbuffer_init(&mp_sbuf);
     msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
 
-    ret = sd_journal_process(ctx->j);
-    if (ret != SD_JOURNAL_APPEND && ret != SD_JOURNAL_NOP) {
-        return FLB_SYSTEMD_NONE;
+    /*
+     * if there are not pending records from a previous round, likely we got
+     * some changes in the journal, otherwise go ahead and continue reading
+     * the journal.
+     */
+    if (ctx->pending_records == FLB_FALSE) {
+        ret = sd_journal_process(ctx->j);
+        if (ret != SD_JOURNAL_APPEND && ret != SD_JOURNAL_NOP) {
+            return FLB_SYSTEMD_NONE;
+        }
     }
 
     while ((ret_j = sd_journal_next(ctx->j)) > 0) {
@@ -142,6 +149,24 @@ static int in_systemd_collect(struct flb_input_instance *i_ins,
         }
         sd_journal_restart_data(ctx->j);
 
+        /*
+         * The new incoming record can have a different tag than previous one,
+         * so a new msgpack buffer is required. We ingest the data and prepare
+         * a new buffer.
+         */
+        if (mp_sbuf.size > 0 &&
+            ((last_tag_len != tag_len) || (strncmp(last_tag, tag, tag_len) != 0))) {
+            flb_input_dyntag_append_raw(ctx->i_ins,
+                                        tag, tag_len,
+                                        mp_sbuf.data,
+                                        mp_sbuf.size);
+            msgpack_sbuffer_destroy(&mp_sbuf);
+            msgpack_sbuffer_init(&mp_sbuf);
+
+            last_tag = tag;
+            last_tag_len = tag_len;
+        }
+
         /* Prepare buffer and write map content */
         msgpack_pack_array(&mp_pck, 2);
         flb_time_append_to_msgpack(&tm, &mp_pck, 0);
@@ -165,23 +190,21 @@ static int in_systemd_collect(struct flb_input_instance *i_ins,
          * Some journals can have too much data, pause if we have processed
          * more than 1MB. Journal will resume later.
          */
-        if (mp_sbuf.size > 1024000 ||
-            ((last_tag_len != tag_len) || strncmp(last_tag, tag, tag_len) != 0)) {
-
+        if (mp_sbuf.size > 1024000) {
             flb_input_dyntag_append_raw(ctx->i_ins,
                                         tag, tag_len,
                                         mp_sbuf.data,
                                         mp_sbuf.size);
             msgpack_sbuffer_destroy(&mp_sbuf);
             msgpack_sbuffer_init(&mp_sbuf);
-            msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
-
             last_tag = tag;
             last_tag_len = tag_len;
+            ret_j = -1;
             break;
         }
 
         if (rows >= ctx->max_entries) {
+            ret_j = -1;
             break;
         }
     }
@@ -195,6 +218,7 @@ static int in_systemd_collect(struct flb_input_instance *i_ins,
         }
     }
 
+    /* Write any pending data into the buffer */
     if (mp_sbuf.size > 0) {
         flb_input_dyntag_append_raw(ctx->i_ins,
                                     tag, tag_len,
@@ -202,10 +226,19 @@ static int in_systemd_collect(struct flb_input_instance *i_ins,
                                     mp_sbuf.size);
     }
     msgpack_sbuffer_destroy(&mp_sbuf);
+
+    /* the journal is empty, no more records */
     if (ret_j == 0) {
+        ctx->pending_records = FLB_FALSE;
         return FLB_SYSTEMD_OK;
     }
 
+    /*
+     * ret_j == -1, the loop was broken due to some special condition like
+     * buffer size limit or it reach the max number of rows that it supposed to
+     * process on this call. Assume there are pending records.
+     */
+    ctx->pending_records = FLB_TRUE;
     return FLB_SYSTEMD_MORE;
 }
 
@@ -214,9 +247,14 @@ static int in_systemd_collect_archive(struct flb_input_instance *i_ins,
 {
     int ret;
     uint64_t val;
+    ssize_t bytes;
     struct flb_systemd_config *ctx = in_context;
 
-    read(ctx->ch_manager[0], &val, sizeof(uint64_t));
+    bytes = read(ctx->ch_manager[0], &val, sizeof(uint64_t));
+    if (bytes == -1) {
+        flb_errno();
+        return -1;
+    }
 
     ret = in_systemd_collect(i_ins, config, in_context);
     if (ret == FLB_SYSTEMD_OK) {
@@ -226,12 +264,27 @@ static int in_systemd_collect_archive(struct flb_input_instance *i_ins,
                                             ctx->fd,
                                             config);
         if (ret == -1) {
-            flb_error("[in_systemd] error setting up collector");
+            flb_error("[in_systemd] error setting up collector events");
             flb_systemd_config_destroy(ctx);
             return -1;
         }
         ctx->coll_fd_journal = ret;
         flb_input_collector_start(ctx->coll_fd_journal, i_ins);
+
+        /* Timer to collect pending events */
+        ret = flb_input_set_collector_time(i_ins,
+                                           in_systemd_collect,
+                                           1, 0,
+                                           config);
+        if (ret == -1) {
+            flb_error("[in_systemd] error setting up collector "
+                      "for pending events");
+            flb_systemd_config_destroy(ctx);
+            return -1;
+        }
+        ctx->coll_fd_pending = ret;
+        flb_input_collector_start(ctx->coll_fd_pending, i_ins);
+
         return 0;
     }
 
@@ -253,6 +306,9 @@ static int in_systemd_init(struct flb_input_instance *in,
         return -1;
     }
 
+    /* Set the context */
+    flb_input_set_context(in, ctx);
+
     /* Events collector: archive */
     ret = flb_input_set_collector_event(in, in_systemd_collect_archive,
                                         ctx->ch_manager[0], config);
@@ -262,8 +318,6 @@ static int in_systemd_init(struct flb_input_instance *in,
     }
     ctx->coll_fd_archive = ret;
 
-    /* Set the context */
-    flb_input_set_context(in, ctx);
     return 0;
 }
 
@@ -297,6 +351,7 @@ static void in_systemd_pause(void *data, struct flb_config *config)
     ret = flb_input_collector_running(ctx->coll_fd_journal, ctx->i_ins);
     if (ret == FLB_TRUE) {
         flb_input_collector_pause(ctx->coll_fd_journal, ctx->i_ins);
+        flb_input_collector_pause(ctx->coll_fd_pending, ctx->i_ins);
     }
 }
 
@@ -311,6 +366,7 @@ static void in_systemd_resume(void *data, struct flb_config *config)
     ret = flb_input_collector_running(ctx->coll_fd_journal, ctx->i_ins);
     if (ret == FLB_FALSE) {
         flb_input_collector_resume(ctx->coll_fd_journal, ctx->i_ins);
+        flb_input_collector_resume(ctx->coll_fd_pending, ctx->i_ins);
     }
 }
 

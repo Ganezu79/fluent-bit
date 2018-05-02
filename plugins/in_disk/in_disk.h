@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -38,6 +38,7 @@ struct flb_in_disk_config {
     int      entry;
     int      interval_sec;
     int      interval_nsec;
+    int      first_snapshot;   /* a feild to indicate whethor or not this is the first collect*/
 };
 
 extern struct flb_input_plugin in_disk_plugin;

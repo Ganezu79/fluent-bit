@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -170,6 +170,7 @@ static int process_content(struct flb_tail_file *file, off_t *bytes)
     int ret;
     off_t processed_bytes = 0;
     char *data;
+    char *end;
     char *p;
     void *out_buf;
     size_t out_size;
@@ -189,7 +190,8 @@ static int process_content(struct flb_tail_file *file, off_t *bytes)
 
     /* Parse the data content */
     data = file->buf_data;
-    while ((p = strchr(data, '\n'))) {
+    end = data + file->buf_len;
+    while ((p = memchr(data, '\n', end - data))) {
         len = (p - data);
 
         if (file->skip_next == FLB_TRUE) {
@@ -235,6 +237,12 @@ static int process_content(struct flb_tail_file *file, off_t *bytes)
                               (char**) &out_buf, &out_size, file);
                 flb_free(out_buf);
             }
+            else {
+                /* Parser failed, pack raw text */
+                flb_time_get(&out_time);
+                flb_tail_file_pack_line(out_sbuf, out_pck, &out_time,
+                                        data, len, file);
+            }
         }
         else if (ctx->multiline == FLB_TRUE) {
             ret = flb_tail_mult_process_content(now,
@@ -265,7 +273,7 @@ static int process_content(struct flb_tail_file *file, off_t *bytes)
 #else
         flb_time_get(&out_time);
         flb_tail_file_pack_line(out_sbuf, out_pck, &out_time,
-                                file->buf_data, len, file);
+                                data, len, file);
 #endif
 
     go_next:
@@ -400,10 +408,25 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
     char *p;
     char out_tmp[PATH_MAX];
     size_t out_size;
+    struct mk_list *head;
     struct flb_tail_file *file;
 
     if (!S_ISREG(st->st_mode)) {
         return -1;
+    }
+
+    /* Double check this file is not already being monitored */
+    mk_list_foreach(head, &ctx->files_static) {
+        file = mk_list_entry(head, struct flb_tail_file, _head);
+        if (strcmp(path, file->name) == 0) {
+            return -1;
+        }
+    }
+    mk_list_foreach(head, &ctx->files_event) {
+        file = mk_list_entry(head, struct flb_tail_file, _head);
+        if (strcmp(path, file->name) == 0) {
+            return -1;
+        }
     }
 
     fd = open(path, O_RDONLY);
@@ -682,10 +705,18 @@ int flb_tail_file_to_event(struct flb_tail_file *file)
 
     /* Check if this file have been rotated */
     name = flb_tail_file_name(file);
+    if (!name) {
+        flb_debug("[in_tail] cannot detect if file was rotated: %s",
+                  file->name);
+        return -1;
+    }
+
     if (strcmp(name, file->name) != 0) {
         ret = stat(name, &st_rotated);
         if (ret == -1) {
             flb_errno();
+            flb_free(name);
+            return -1;
         }
         else if (st_rotated.st_ino != st.st_ino) {
             flb_trace("[in_tail] static file rotated: %s => to %s",
@@ -720,16 +751,21 @@ char *flb_tail_file_name(struct flb_tail_file *file)
     ssize_t s;
     char tmp[128];
     char *buf;
-
-    ret = snprintf(tmp, sizeof(tmp) - 1, "/proc/%i/fd/%i", getpid(), file->fd);
-    if (ret == -1) {
-        flb_errno();
-        return NULL;
-    }
+#ifdef __APPLE__
+    char path[PATH_MAX];
+#endif
 
     buf = flb_malloc(PATH_MAX);
     if (!buf) {
         flb_errno();
+        return NULL;
+    }
+
+#ifdef __linux__
+    ret = snprintf(tmp, sizeof(tmp) - 1, "/proc/%i/fd/%i", getpid(), file->fd);
+    if (ret == -1) {
+        flb_errno();
+        flb_free(buf);
         return NULL;
     }
 
@@ -740,6 +776,21 @@ char *flb_tail_file_name(struct flb_tail_file *file)
         return NULL;
     }
     buf[s] = '\0';
+
+#elif __APPLE__
+    int len;
+
+    ret = fcntl(file->fd, F_GETPATH, path);
+    if (ret == -1) {
+        flb_errno();
+        flb_free(buf);
+        return NULL;
+    }
+
+    len = strlen(path);
+    memcpy(buf, path, len);
+    buf[len] = '\0';
+#endif
 
     return buf;
 }
@@ -814,6 +865,9 @@ int flb_tail_file_rotated_purge(struct flb_input_instance *i_ins,
         file = mk_list_entry(head, struct flb_tail_file, _rotate_head);
         if ((file->rotated + ctx->rotate_wait) <= now) {
             flb_debug("[in_tail] purge rotated file %s", file->name);
+            if (file->pending_bytes > 0 && flb_input_buf_paused(i_ins)) {
+                flb_warn("[in_tail] purged rotated file while data ingestion is paused, consider increasing rotate_wait");
+            }
             flb_tail_file_remove(file);
             count++;
         }

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -131,6 +131,8 @@ int syslog_prot_process_udp(char *buf, size_t size, struct flb_syslog *ctx)
     out_sbuf = &ctx->i_ins->mp_sbuf;
     out_pck  = &ctx->i_ins->mp_pck;
 
+    flb_input_buf_write_start(ctx->i_ins);
+
     ret = flb_parser_do(ctx->parser, buf, size,
                         &out_buf, &out_size, &out_time);
     if (ret >= 0) {
@@ -145,6 +147,8 @@ int syslog_prot_process_udp(char *buf, size_t size, struct flb_syslog *ctx)
         flb_warn("[in_syslog] error parsing log message");
         return -1;
     }
+
+    flb_input_buf_write_end(ctx->i_ins);
 
     return 0;
 }

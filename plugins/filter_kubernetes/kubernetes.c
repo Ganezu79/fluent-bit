@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,13 +20,132 @@
 #include <fluent-bit/flb_filter.h>
 #include <fluent-bit/flb_utils.h>
 #include <fluent-bit/flb_pack.h>
+#include <fluent-bit/flb_parser.h>
 
 #include "kube_conf.h"
 #include "kube_meta.h"
 #include "kube_regex.h"
+#include "kube_property.h"
 
 #include <stdio.h>
 #include <msgpack.h>
+
+/* Merge status used by merge_log_handler() */
+#define MERGE_UNESCAPED   0 /* merge unescaped string in temporal buffer */
+#define MERGE_PARSED      1 /* merge parsed string (log_buf)             */
+#define MERGE_BINARY      2 /* merge direct binary object (v)            */
+
+static int unescape_string(char *buf, int buf_len, char **unesc_buf)
+{
+    int i = 0;
+    int j = 0;
+    char *p;
+    char n;
+
+    p = *unesc_buf;
+    while (i < buf_len) {
+        if (buf[i] == '\\') {
+            if (i + 1 < buf_len) {
+                n = buf[i + 1];
+                if (n != 'a' && n != 'b' &&
+                    n != 't' && n != 'n' &&
+                    n != 'v' && n != 'f' &&
+                    n != 'r') {
+                    i++;
+                }
+            }
+            else {
+                i++;
+            }
+        }
+        p[j++] = buf[i++];
+    }
+    p[j] = '\0';
+    return j;
+}
+
+static int merge_log_handler(msgpack_object o,
+                             struct flb_parser *parser,
+                             void **out_buf, size_t *out_size,
+                             struct flb_time *log_time,
+                             struct flb_kube *ctx)
+{
+    int i;
+    int ret;
+    int size;
+    int new_size;
+    int unesc_len = 0;
+    char *tmp;
+
+    /* Reset vars */
+    *out_buf = NULL;
+    *out_size = 0;
+    ctx->unesc_buf_len = 0;
+
+    /* Allocate more space if required */
+    if (o.via.str.size >= ctx->unesc_buf_size) {
+        new_size = o.via.str.size + 1;
+        tmp = flb_realloc(ctx->unesc_buf, new_size);
+        if (tmp) {
+            ctx->unesc_buf = tmp;
+            ctx->unesc_buf_size = new_size;
+        }
+        else {
+            flb_errno();
+            return -1;
+        }
+    }
+
+    /*
+     * Check where to cut the string if common ending bytes like \r or \n
+     * exists.
+     */
+    size = o.via.str.size;
+    for (i = size - 1; i > 0; i--) {
+        if (o.via.str.ptr[i] == '\n') {
+            size -= 1;
+            i--;
+            continue;
+        }
+
+        if (o.via.str.ptr[i - 1] == '\\' &&
+            (o.via.str.ptr[i] == 'n' || o.via.str.ptr[i] == 'r')) {
+            size -= 2;
+            i--;
+        }
+        else {
+            break;
+        }
+    }
+
+    /* Unescape application string */
+    unesc_len = unescape_string((char *) o.via.str.ptr,
+                                size, &ctx->unesc_buf);
+    ctx->unesc_buf_len = unesc_len;
+
+    ret = -1;
+    if (parser) {
+        ret = flb_parser_do(parser, ctx->unesc_buf, unesc_len,
+                            out_buf, out_size, log_time);
+        if (ret >= 0) {
+            if (flb_time_to_double(log_time) == 0) {
+                flb_time_get(log_time);
+            }
+            return MERGE_PARSED;
+        }
+    }
+    else {
+        ret = flb_pack_json(ctx->unesc_buf, unesc_len,
+                            (char **) out_buf, out_size);
+    }
+
+    if (ret == -1) {
+        flb_debug("[filter_kube] could not merge JSON log as requested");
+        return MERGE_UNESCAPED;
+    }
+
+    return MERGE_PARSED;
+}
 
 static int cb_kube_init(struct flb_filter_instance *f_ins,
                         struct flb_config *config,
@@ -62,130 +181,89 @@ static int cb_kube_init(struct flb_filter_instance *f_ins,
     return 0;
 }
 
-static int unescape_string(char *buf, int buf_len, char **unesc_buf)
-{
-    int i = 0;
-    int j = 0;
-    char *p;
-    char n;
-
-    p = *unesc_buf;
-    while (i < buf_len) {
-        if (buf[i] == '\\') {
-            if (i + 1 < buf_len) {
-                n = buf[i + 1];
-                if (n != 'a' && n != 'b' &&
-                    n != 't' && n != 'n' &&
-                    n != 'v' && n != 'f' &&
-                    n != 'r') {
-                    i++;
-                }
-            }
-            else {
-                i++;
-            }
-        }
-        p[j++] = buf[i++];
-    }
-    p[j] = '\0';
-    return j;
-}
-
 static int pack_map_content(msgpack_packer *pck, msgpack_sbuffer *sbuf,
                             msgpack_object source_map,
                             char *kube_buf, size_t kube_size,
-                            struct flb_kube_meta *meta, struct flb_kube *ctx)
+                            struct flb_kube_meta *meta,
+                            struct flb_parser *parser,
+                            struct flb_kube *ctx)
 {
     int i;
-    int ret;
-    int new_size;
     int map_size;
-    int size;
+    int merge_status = -1;
     int new_map_size = 0;
     int log_index = -1;
     int log_size = 0;
     int json_size;
     int log_buf_entries = 0;
     size_t off = 0;
-    char *tmp;
-    char *log_buf = NULL;
+    void *log_buf = NULL;
+    size_t log_size = 0;
     msgpack_unpacked result;
     msgpack_object k;
     msgpack_object v;
     msgpack_object root;
+    struct flb_time log_time = {0};
 
     /* Original map size */
     map_size = source_map.via.map.size;
 
-    /* If merge_json_log is enabled, we need to lookup the 'log' field */
-    if (ctx->merge_json_log == FLB_TRUE) {
+    /* If merge_log is enabled, we need to lookup the 'log' field */
+    if (ctx->merge_log == FLB_TRUE) {
         for (i = 0; i < map_size; i++) {
             k = source_map.via.map.ptr[i].key;
 
             /* Validate 'log' field */
             if (k.via.str.size == 3 &&
                 strncmp(k.via.str.ptr, "log", 3) == 0) {
-                /* do we have a JSON map ? */
-                v = source_map.via.map.ptr[i].val;
-                if (v.via.str.ptr[0] != '{') {
-                    /* not a json map, no merge can be done */
-                    break;
-                }
-
                 log_index = i;
                 break;
             }
         }
     }
 
+    if (flb_time_to_double(&log_time) == 0) {
+        flb_time_get(&log_time);
+    }
+
     /*
-     * If a log_index exists, means that a JSON map is inside a Docker json
-     * like a escaped string. Before to pack it we need to convert it to a
-     * native JSON structured format.
+     * If a log_index exists, the application log content inside the Docker JSON
+     * map is a escaped string. Proceed to reserve a temporal buffer and create
+     * an unescaped version.
      */
     if (log_index != -1) {
         v = source_map.via.map.ptr[log_index].val;
-        if (v.via.str.size >= ctx->merge_json_buf_size) {
-            new_size = v.via.str.size + 1;
-            tmp = flb_realloc(ctx->merge_json_buf, new_size);
-            if (tmp) {
-                ctx->merge_json_buf = tmp;
-                ctx->merge_json_buf_size = new_size;
-            }
-            else {
-                flb_errno();
-                return -1;
-            }
+        if (v.type == MSGPACK_OBJECT_STR) {
+            merge_status = merge_log_handler(v, parser,
+                                             &log_buf, &log_size, &log_time,
+                                             ctx);
         }
+        else if (v.type == MSGPACK_OBJECT_MAP) {
+            /* This is the easiest way, no extra processing required */
+            merge_status = MERGE_BINARY;
+        }
+    }
+    else {
 
-        /* Do not process ending \n if set at the end of the map */
-        size = v.via.str.size;
-        for (i = size - 1; i > 0; i--) {
-            if (v.via.str.ptr[i] == '}') {
-                size = i + 1;
-                break;
-            }
-        }
-        json_size = unescape_string((char *) v.via.str.ptr,
-                                    size, &ctx->merge_json_buf);
-        ret = flb_pack_json(ctx->merge_json_buf, json_size,
-                            &log_buf, &log_size);
-        if (ret != 0) {
-            flb_warn("[filter_kube] could not pack merged json");
-        }
     }
 
     /* Determinate the size of the new map */
     new_map_size = map_size;
 
     /* If a merged json exists, check the number of entries in that new map */
-    if (log_buf && log_index != -1) {
-        off = 0;
-        msgpack_unpacked_init(&result);
-        msgpack_unpack_next(&result, log_buf, log_size, &off);
-        root = result.data;
-        log_buf_entries = root.via.map.size;
-        msgpack_unpacked_destroy(&result);
+    if (log_index != -1) {
+        if (merge_status == MERGE_PARSED) {
+            off = 0;
+            msgpack_unpacked_init(&result);
+            msgpack_unpack_next(&result, log_buf, log_size, &off);
+            root = result.data;
+            log_buf_entries = root.via.map.size;
+            msgpack_unpacked_destroy(&result);
+        }
+        else if (merge_status == MERGE_BINARY) {
+            /* object 'v' represents the original binary log */
+            log_buf_entries = v.via.map.size;
+        }
     }
 
     /* Kubernetes metadata */
@@ -209,29 +287,57 @@ static int pack_map_content(msgpack_packer *pck, msgpack_sbuffer *sbuf,
         v = source_map.via.map.ptr[i].val;
         msgpack_pack_object(pck, k);
         msgpack_pack_object(pck, v);
-    }
 
-    /* Merged JSON */
-    if (log_buf && log_index != -1) {
-        if (ctx->merge_json_key && log_buf_entries > 0) {
-            msgpack_pack_str(pck, ctx->merge_json_key_len);
-            msgpack_pack_str_body(pck, ctx->merge_json_key,
-                                  ctx->merge_json_key_len);
-            msgpack_pack_map(pck, log_buf_entries);
+        /*
+         * If the original 'log' field was unescaped and converted to
+         * msgpack properly, re-pack the new string version to avoid
+         * multiple escape sequences in outgoing plugins.
+         */
+        if (log_index == i &&
+            (merge_status == MERGE_UNESCAPED || merge_status == MERGE_PARSED)) {
+            msgpack_pack_object(pck, k);
+            msgpack_pack_str(pck, ctx->unesc_buf_len);
+            msgpack_pack_str_body(pck, ctx->unesc_buf, ctx->unesc_buf_len);
         }
-
-        off = 0;
-        msgpack_unpacked_init(&result);
-        msgpack_unpack_next(&result, log_buf, log_size, &off);
-        root = result.data;
-        for (i = 0; i < log_buf_entries; i++) {
-            k = root.via.map.ptr[i].key;
-            v = root.via.map.ptr[i].val;
+        else { /* MERGE_BINARY ? */
             msgpack_pack_object(pck, k);
             msgpack_pack_object(pck, v);
         }
-        msgpack_unpacked_destroy(&result);
-        flb_free(log_buf);
+    }
+
+    /* Merge Log */
+    if (log_index != -1) {
+        if (merge_status == MERGE_PARSED) {
+            if (ctx->merge_json_key && log_buf_entries > 0) {
+                msgpack_pack_str(pck, ctx->merge_json_key_len);
+                msgpack_pack_str_body(pck, ctx->merge_json_key,
+                                      ctx->merge_json_key_len);
+                msgpack_pack_map(pck, log_buf_entries);
+            }
+
+            off = 0;
+            msgpack_unpacked_init(&result);
+            msgpack_unpack_next(&result, log_buf, log_size, &off);
+            root = result.data;
+            for (i = 0; i < log_buf_entries; i++) {
+                k = root.via.map.ptr[i].key;
+                v = root.via.map.ptr[i].val;
+                msgpack_pack_object(pck, k);
+                msgpack_pack_object(pck, v);
+            }
+            msgpack_unpacked_destroy(&result);
+            flb_free(log_buf);
+        }
+        else if (merge_status == MERGE_BINARY) {
+            msgpack_object bin_map;
+            bin_map = source_map.via.map.ptr[log_index].val;
+            for (i = 0; i < bin_map.via.map.size; i++) {
+                k = bin_map.via.map.ptr[i].key;
+                v = bin_map.via.map.ptr[i].val;
+                msgpack_pack_object(pck, k);
+                msgpack_pack_object(pck, v);
+            }
+        }
     }
 
     /* Kubernetes */
@@ -293,6 +399,7 @@ static int cb_kube_filter(void *data, size_t bytes,
                           struct flb_config *config)
 {
     int ret;
+    size_t pre = 0;
     size_t off = 0;
     char *cache_buf = NULL;
     size_t cache_size = 0;
@@ -302,19 +409,34 @@ static int cb_kube_filter(void *data, size_t bytes,
     msgpack_object root;
     msgpack_sbuffer tmp_sbuf;
     msgpack_packer tmp_pck;
+    struct flb_parser *parser = NULL;
     struct flb_kube *ctx = filter_context;
     struct flb_kube_meta meta = {0};
-
+    struct flb_kube_props props = {0};
     (void) f_ins;
     (void) config;
 
-    /* Check if we have some cached metadata for the incoming events */
-    ret = flb_kube_meta_get(ctx,
-                            tag, tag_len,
-                            data, bytes,
-                            &cache_buf, &cache_size, &meta);
-    if (ret == -1) {
-        return FLB_FILTER_NOTOUCH;
+    if (ctx->use_journal == FLB_FALSE) {
+        /* Check if we have some cached metadata for the incoming events */
+        ret = flb_kube_meta_get(ctx,
+                                tag, tag_len,
+                                data, bytes,
+                                &cache_buf, &cache_size, &meta, &props);
+        if (ret == -1) {
+            flb_kube_prop_destroy(&props);
+            return FLB_FILTER_NOTOUCH;
+        }
+
+        if (props.parser != NULL) {
+            parser = flb_parser_get(props.parser, config);
+        }
+
+        if (props.exclude == FLB_TRUE) {
+            *out_buf   = NULL;
+            *out_bytes = 0;
+            flb_kube_prop_destroy(&props);
+            return FLB_FILTER_MODIFIED;
+        }
     }
 
     /* Create temporal msgpack buffer */
@@ -329,6 +451,39 @@ static int cb_kube_filter(void *data, size_t bytes,
             continue;
         }
 
+        /*
+         * Journal entries can be origined by different Pods, so we are forced
+         * to parse and check it metadata.
+         *
+         * note: when the source is in_tail the situation is different since all
+         * records passed to the filter have a unique source log file.
+         */
+        if (ctx->use_journal == FLB_TRUE) {
+            parser = NULL;
+            cache_buf = NULL;
+            memset(&props, '\0', sizeof(struct flb_kube_props));
+
+            ret = flb_kube_meta_get(ctx,
+                                    tag, tag_len,
+                                    data + pre, off - pre,
+                                    &cache_buf, &cache_size, &meta, &props);
+            if (ret == -1) {
+                flb_kube_prop_destroy(&props);
+                return FLB_FILTER_NOTOUCH;
+            }
+
+            if (props.parser != NULL) {
+                parser = flb_parser_get(props.parser, config);
+            }
+
+            if (props.exclude == FLB_TRUE) {
+                /* Skip this record */
+                continue;
+            }
+
+            pre = off;
+        }
+
         /* get time and map */
         time = root.via.array.ptr[0];
         map  = root.via.array.ptr[1];
@@ -340,20 +495,29 @@ static int cb_kube_filter(void *data, size_t bytes,
         ret = pack_map_content(&tmp_pck, &tmp_sbuf,
                                map,
                                cache_buf, cache_size,
-                               &meta, ctx);
+                               &meta, parser, ctx);
         if (ret != 0) {
             msgpack_sbuffer_destroy(&tmp_sbuf);
             msgpack_unpacked_destroy(&result);
             if (ctx->dummy_meta == FLB_TRUE) {
                 flb_free(cache_buf);
             }
+
+            flb_kube_meta_release(&meta);
+            flb_kube_prop_destroy(&props);
             return FLB_FILTER_NOTOUCH;
+        }
+
+        if (ctx->use_journal == FLB_TRUE) {
+            flb_kube_meta_release(&meta);
         }
     }
     msgpack_unpacked_destroy(&result);
 
     /* Release meta fields */
-    flb_kube_meta_release(&meta);
+    if (ctx->use_journal == FLB_FALSE) {
+        flb_kube_meta_release(&meta);
+    }
 
     /* link new buffers */
     *out_buf   = tmp_sbuf.data;
@@ -362,6 +526,8 @@ static int cb_kube_filter(void *data, size_t bytes,
     if (ctx->dummy_meta == FLB_TRUE) {
         flb_free(cache_buf);
     }
+
+    flb_kube_prop_destroy(&props);
     return FLB_FILTER_MODIFIED;
 }
 

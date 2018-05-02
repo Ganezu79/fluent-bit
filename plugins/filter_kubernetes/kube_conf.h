@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -49,9 +49,10 @@
 #define FLB_MERGE_BUF_SIZE  2048  /* 2KB */
 
 /* Kubernetes API server info */
-#define FLB_API_HOST  "kubernetes.default.svc"
+#define FLB_API_HOST  "kubernetes.default.svc.cluster.local"
 #define FLB_API_PORT  443
 #define FLB_API_TLS   FLB_TRUE
+
 struct kube_meta;
 
 /* Filter context */
@@ -61,23 +62,36 @@ struct flb_kube {
     int api_port;
     int api_https;
     int use_journal;
+    int annotations;
     int dummy_meta;
     int tls_debug;
     int tls_verify;
 
+    /* Configuration proposed through Annotations (boolean) */
+    int k8s_logging_parser;   /* allow to process a suggested parser ? */
+    int k8s_logging_exclude;  /* allowed to suggest to exclude logs ?  */
+
     /* HTTP Client Setup */
     size_t buffer_size;
 
-    /* Merge JSON feature */
-    int merge_json_log;
-    int merge_json_buf_size;
-    char *merge_json_buf;
+    /* Merge Log feature */
+    int merge_log;             /* old merge_json_log */
 
+    /* Temporal buffer to unescape strings */
+    size_t unesc_buf_size;
+    size_t unesc_buf_len;
+    char *unesc_buf;
+
+    /* JSON key (default 'log') */
     int merge_json_key_len;
     char *merge_json_key;
 
+    /* API Server end point */
     char kube_url[1024];
+
+    /* Regex context to parse records */
     struct flb_regex *regex;
+    struct flb_parser *parser;
 
     /* TLS CA certificate file */
     char *tls_ca_path;

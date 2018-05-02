@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -84,15 +84,18 @@ static unsigned int gen_hash(const void *key, int len)
     return (unsigned int) h;
 }
 
-static inline void flb_hash_entry_free(struct flb_hash_entry *entry)
+static inline void flb_hash_entry_free(struct flb_hash *ht, struct flb_hash_entry *entry)
 {
     mk_list_del(&entry->_head);
+    mk_list_del(&entry->_head_parent);
+    entry->table->count--;
+    ht->total_count--;
     flb_free(entry->key);
     flb_free(entry->val);
     flb_free(entry);
 }
 
-struct flb_hash *flb_hash_create(size_t size)
+struct flb_hash *flb_hash_create(int evict_mode, size_t size, int max_entries)
 {
     int i;
     struct flb_hash_table *tmp;
@@ -108,7 +111,12 @@ struct flb_hash *flb_hash_create(size_t size)
         return NULL;
     }
 
+    mk_list_init(&ht->entries);
+    ht->evict_mode = evict_mode;
+    ht->max_entries = max_entries;
+    ht->total_count = 0;
     ht->size = size;
+    ht->total_count = 0;
     ht->table = flb_calloc(1, sizeof(struct flb_hash_table) * size);
     if (!ht->table) {
         flb_errno();
@@ -138,13 +146,31 @@ void flb_hash_destroy(struct flb_hash *ht)
         table = &ht->table[i];
         mk_list_foreach_safe(head, tmp, &table->chains) {
             entry = mk_list_entry(head, struct flb_hash_entry, _head);
-            flb_hash_entry_free(entry);
-            table->count--;
+            flb_hash_entry_free(ht, entry);
         }
     }
 
     flb_free(ht->table);
     flb_free(ht);
+}
+
+static void flb_hash_evict_random(struct flb_hash *ht)
+{
+    int id;
+    int count = 0;
+    struct mk_list *tmp;
+    struct mk_list *head;
+    struct flb_hash_entry *entry;
+
+    id = random() % ht->total_count;
+    mk_list_foreach_safe(head, tmp, &ht->entries) {
+        if (id == count) {
+            entry = mk_list_entry(head, struct flb_hash_entry, _head_parent);
+            flb_hash_entry_free(ht, entry);
+            break;
+        }
+        count++;
+    }
 }
 
 int flb_hash_add(struct flb_hash *ht, char *key, int key_len,
@@ -162,6 +188,23 @@ int flb_hash_add(struct flb_hash *ht, char *key, int key_len,
         return -1;
     }
 
+    /* Check capacity */
+    if (ht->max_entries > 0 && ht->total_count >= ht->max_entries) {
+        /* FIXME: handle eviction mode */
+        if (ht->evict_mode == FLB_HASH_EVICT_NONE) {
+
+        }
+        else if (ht->evict_mode == FLB_HASH_EVICT_OLDER) {
+
+        }
+        else if (ht->evict_mode == FLB_HASH_EVICT_LESS_USED) {
+
+        }
+        else if (ht->evict_mode == FLB_HASH_EVICT_RANDOM) {
+            flb_hash_evict_random(ht);
+        }
+    }
+
     /* Generate hash number */
     hash = gen_hash(key, key_len);
     id = (hash % ht->size);
@@ -172,6 +215,8 @@ int flb_hash_add(struct flb_hash *ht, char *key, int key_len,
         flb_errno();
         return -1;
     }
+    entry->created = time(NULL);
+    entry->hits = 0;
 
     /* Store the key and value as a new memory region */
     entry->key = flb_strdup(key);
@@ -183,6 +228,7 @@ int flb_hash_add(struct flb_hash *ht, char *key, int key_len,
         flb_free(entry);
         return -1;
     }
+
     /*
      * Copy the buffer and append a NULL byte in case the caller set and
      * expects a string.
@@ -193,24 +239,27 @@ int flb_hash_add(struct flb_hash *ht, char *key, int key_len,
 
     /* Link the new entry in our table at the end of the list */
     table = &ht->table[id];
+    entry->table = table;
 
     /* Check if the new key already exists */
     if (table->count == 0) {
         mk_list_add(&entry->_head, &table->chains);
+        mk_list_add(&entry->_head_parent, &ht->entries);
     }
     else {
         mk_list_foreach_safe(head, tmp, &table->chains) {
             old = mk_list_entry(head, struct flb_hash_entry, _head);
             if (strcmp(old->key, entry->key) == 0) {
-                flb_hash_entry_free(old);
-                table->count--;
+                flb_hash_entry_free(ht, old);
                 break;
             }
         }
         mk_list_add(&entry->_head, &table->chains);
+        mk_list_add(&entry->_head_parent, &ht->entries);
     }
 
     table->count++;
+    ht->total_count++;
 
     return id;
 }
@@ -270,6 +319,7 @@ int flb_hash_get(struct flb_hash *ht, char *key, int key_len,
         return -1;
     }
 
+    entry->hits++;
     *out_buf = entry->val;
     *out_size = entry->val_size;
 
@@ -357,8 +407,7 @@ int flb_hash_del(struct flb_hash *ht, char *key)
         return -1;
     }
 
-    flb_hash_entry_free(entry);
-    table->count--;
+    flb_hash_entry_free(ht, entry);
 
     return 0;
 }

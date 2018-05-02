@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,7 +22,9 @@
 #include <fluent-bit/flb_mem.h>
 #include <fluent-bit/flb_str.h>
 #include <fluent-bit/flb_parser.h>
+#include <fluent-bit/flb_parser_decoder.h>
 #include <fluent-bit/flb_time.h>
+#include <fluent-bit/flb_error.h>
 #include <fluent-bit/flb_utils.h>
 
 #include <sys/types.h>
@@ -100,6 +102,7 @@ struct flb_parser *flb_parser_create(char *name, char *format,
                                      int time_keep,
                                      struct flb_parser_types *types,
                                      int types_len,
+                                     struct mk_list *decoders,
                                      struct flb_config *config)
 {
     int ret;
@@ -121,11 +124,13 @@ struct flb_parser *flb_parser_create(char *name, char *format,
         }
     }
 
+    /* Allocate context */
     p = flb_calloc(1, sizeof(struct flb_parser));
     if (!p) {
         flb_errno();
         return NULL;
     }
+    p->decoders = decoders;
 
     /* Format lookup */
     if (strcmp(format, "regex") == 0) {
@@ -203,7 +208,11 @@ struct flb_parser *flb_parser_create(char *name, char *format,
             tmp = strstr(p->time_fmt, "%S.%L");
         }
         else {
-            tmp = strstr(p->time_fmt_year, "%S.%L");
+            tmp = strstr(p->time_fmt_year, "%s.%L");
+
+            if (tmp == NULL) {
+                tmp = strstr(p->time_fmt_year, "%S.%L");
+            }
         }
         if (tmp) {
             tmp[2] = '\0';
@@ -271,6 +280,10 @@ void flb_parser_destroy(struct flb_parser *parser)
             flb_free(parser->types[i].key);
         }
         flb_free(parser->types);
+    }
+
+    if (parser->decoders) {
+        flb_parser_decoder_list_destroy(parser->decoders);
     }
 
     mk_list_del(&parser->_head);
@@ -361,11 +374,13 @@ int flb_parser_conf_file(char *file, struct flb_config *config)
     struct mk_list *head;
     struct stat st;
     struct flb_parser_types *types;
+    struct mk_list *decoders;
 
     ret = stat(file, &st);
     if (ret == -1 && errno == ENOENT) {
         /* Try to resolve the real path (if exists) */
         if (file[0] == '/') {
+            flb_utils_error(FLB_ERR_CFG_PARSER_FILE);
             return -1;
         }
 
@@ -433,6 +448,7 @@ int flb_parser_conf_file(char *file, struct flb_config *config)
                                        MK_RCONF_STR);
         if (str) {
             time_keep = flb_utils_bool(str);
+            flb_free(str);
         }
         else {
             time_keep = FLB_FALSE;
@@ -452,10 +468,13 @@ int flb_parser_conf_file(char *file, struct flb_config *config)
             types_len = 0;
         }
 
+        /* Decoders */
+        decoders = flb_parser_decoder_list_create(section);
+
         /* Create the parser context */
         if (!flb_parser_create(name, format, regex,
                                time_fmt, time_key, time_offset, time_keep,
-                               types, types_len, config)) {
+                               types, types_len, decoders, config)) {
             goto fconf_error;
         }
 
@@ -479,6 +498,8 @@ int flb_parser_conf_file(char *file, struct flb_config *config)
         if (types_str) {
             flb_free(types_str);
         }
+
+        decoders = NULL;
     }
 
     mk_rconf_free(fconf);
@@ -498,6 +519,9 @@ int flb_parser_conf_file(char *file, struct flb_config *config)
     }
     if (types_str) {
         flb_free(types_str);
+    }
+    if (decoders) {
+        flb_parser_decoder_list_destroy(decoders);
     }
     mk_rconf_free(fconf);
     return -1;

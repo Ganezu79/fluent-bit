@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -34,9 +34,19 @@ struct flb_influxdb_config {
     char *db_name;
     int  db_len;
 
+    /* HTTP Auth */
+    char *http_user;
+    char *http_passwd;
+
     /* sequence tag */
     char *seq_name;
     int seq_len;
+
+    /* auto_tags: on/off */
+    int auto_tags;
+
+    /* tag_keys: space separated list of key */
+    struct mk_list *tag_keys;
 
     /* Upstream connection to the backend server */
     struct flb_upstream *u;

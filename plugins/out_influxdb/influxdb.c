@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -30,6 +30,18 @@
 #include "influxdb_bulk.h"
 
 /*
+ * Returns FLB_TRUE if the specified value is true, otherwise FLB_FALSE
+ */
+static int bool_value(char *v);
+
+/*
+ * Returns FLB_TRUE when the specified key is in Tag_Keys list,
+ * otherwise FLB_FALSE
+ */
+static int is_tagged_key(struct flb_influxdb_config *ctx,
+                         char *key, int kl, int type);
+
+/*
  * Convert the internal Fluent Bit data representation to the required one
  * by InfluxDB.
  */
@@ -49,7 +61,9 @@ static char *influxdb_format(char *tag, int tag_len,
     msgpack_object map;
     msgpack_object *obj;
     struct flb_time tm;
-    struct influxdb_bulk *bulk;
+    struct influxdb_bulk *bulk = NULL;
+    struct influxdb_bulk *bulk_head = NULL;
+    struct influxdb_bulk *bulk_body = NULL;
 
     /* Iterate the original buffer and perform adjustments */
     msgpack_unpacked_init(&result);
@@ -77,7 +91,17 @@ static char *influxdb_format(char *tag, int tag_len,
     /* Create the bulk composer */
     bulk = influxdb_bulk_create();
     if (!bulk) {
-        return NULL;
+        goto error;
+    }
+
+    bulk_head = influxdb_bulk_create();
+    if (!bulk_head) {
+        goto error;
+    }
+
+    bulk_body = influxdb_bulk_create();
+    if (!bulk_body) {
+        goto error;
     }
 
     off = 0;
@@ -107,14 +131,12 @@ static char *influxdb_format(char *tag, int tag_len,
             ctx->seq++;
         }
 
-        ret = influxdb_bulk_append_header(bulk,
+        ret = influxdb_bulk_append_header(bulk_head,
                                           tag, tag_len,
                                           seq,
                                           ctx->seq_name, ctx->seq_len);
         if (ret == -1) {
-            influxdb_bulk_destroy(bulk);
-            msgpack_unpacked_destroy(&result);
-            return NULL;
+            goto error;
         }
 
         for (i = 0; i < n_size - 1; i++) {
@@ -193,22 +215,72 @@ static char *influxdb_format(char *tag, int tag_len,
                                           key, key_len,
                                           val, val_len,
                                           i, quote);
+
+            char *str = NULL;
+            int str_size;
+
+            /* is this a string ? */
+            if (quote == FLB_TRUE) {
+                ret = flb_utils_write_str_buf(val, val_len,
+                                              &str, &str_size);
+                if (ret == -1) {
+                    flb_errno();
+                    goto error;
+                }
+
+                val = str;
+                val_len = str_size;
+            }
+
+            if (is_tagged_key(ctx, key, key_len, v->type)) {
+                /* Append key/value data into the bulk_head */
+                ret = influxdb_bulk_append_kv(bulk_head,
+                                              key, key_len,
+                                              val, val_len,
+                                              quote);
+            }
+            else {
+                /* Append key/value data into the bulk_body */
+                ret = influxdb_bulk_append_kv(bulk_body,
+                                              key, key_len,
+                                              val, val_len,
+                                              quote);
+            }
+
+            if (quote == FLB_TRUE) {
+                flb_free(str);
+                str_size = 0;
+            }
+
             if (ret == -1) {
                 flb_error("[out_influxdb] cannot append key/value");
-                influxdb_bulk_destroy(bulk);
-                msgpack_unpacked_destroy(&result);
-                return NULL;
+                goto error;
             }
         }
 
-        /* Append the timestamp */
-        ret = influxdb_bulk_append_timestamp(bulk, &tm);
-        if (ret == -1) {
-            flb_error("[out_influxdb] cannot append timestamp");
-            influxdb_bulk_destroy(bulk);
-            msgpack_unpacked_destroy(&result);
-            return NULL;
+        /* Check have data fields */
+        if (bulk_body->len > 0) {
+            /* Append the timestamp */
+            ret = influxdb_bulk_append_timestamp(bulk_body, &tm);
+            if (ret == -1) {
+                flb_error("[out_influxdb] cannot append timestamp");
+                goto error;
+            }
+
+            /* Append collected data to final bulk */
+            if (influxdb_bulk_append_bulk(bulk, bulk_head, '\n') != 0 ||
+                influxdb_bulk_append_bulk(bulk, bulk_body, ' ') != 0) {
+                goto error;
+            }
+        } else {
+            flb_error("[out_influxdb] cannot send record, "
+                      "because all field is tagged in record");
+            /* Following records maybe ok, so continue processing */
         }
+
+        /* Reset bulk_head and bulk_body */
+        bulk_head->len = 0;
+        bulk_body->len = 0;
     }
 
     msgpack_unpacked_destroy(&result);
@@ -222,8 +294,23 @@ static char *influxdb_format(char *tag, int tag_len,
      * return the bulk->ptr buffer
      */
     flb_free(bulk);
+    influxdb_bulk_destroy(bulk_head);
+    influxdb_bulk_destroy(bulk_body);
 
     return buf;
+
+error:
+    if (bulk != NULL) {
+        influxdb_bulk_destroy(bulk);
+    }
+    if (bulk_head != NULL) {
+        influxdb_bulk_destroy(bulk_head);
+    }
+    if (bulk_body != NULL) {
+        influxdb_bulk_destroy(bulk_body);
+    }
+    msgpack_unpacked_destroy(&result);
+    return NULL;
 }
 
 int cb_influxdb_init(struct flb_output_instance *ins, struct flb_config *config,
@@ -244,7 +331,7 @@ int cb_influxdb_init(struct flb_output_instance *ins, struct flb_config *config,
     }
 
     /* Allocate plugin context */
-    ctx = flb_malloc(sizeof(struct flb_influxdb_config));
+    ctx = flb_calloc(1, sizeof(struct flb_influxdb_config));
     if (!ctx) {
         flb_errno();
         return -1;
@@ -281,6 +368,38 @@ int cb_influxdb_init(struct flb_output_instance *ins, struct flb_config *config,
 
     if (ins->host.ipv6 == FLB_TRUE) {
         io_flags |= FLB_IO_IPV6;
+    }
+
+    /* HTTP Auth */
+    tmp = flb_output_get_property("http_user", ins);
+    if (tmp) {
+        ctx->http_user = flb_strdup(tmp);
+
+        tmp = flb_output_get_property("http_passwd", ins);
+        if (tmp) {
+            ctx->http_passwd = flb_strdup(tmp);
+        }
+        else {
+            ctx->http_passwd = flb_strdup("");
+        }
+    }
+
+    /* Auto_Tags */
+    tmp = flb_output_get_property("auto_tags", ins);
+    if (tmp) {
+        ctx->auto_tags = bool_value(tmp);
+    }
+    else {
+        ctx->auto_tags = FLB_FALSE;
+    }
+
+    /* Tag_Keys */
+    tmp = flb_output_get_property("tag_keys", ins);
+    if (tmp) {
+        ctx->tag_keys = flb_utils_split(tmp, ' ', 256);
+    }
+    else {
+        ctx->tag_keys = NULL;
     }
 
     /* Prepare an upstream handler */
@@ -334,13 +453,28 @@ void cb_influxdb_flush(void *data, size_t bytes,
                         pack, bytes_out, NULL, 0, NULL, 0);
     flb_http_add_header(c, "User-Agent", 10, "Fluent-Bit", 10);
 
+    if (ctx->http_user && ctx->http_passwd) {
+        flb_http_basic_auth(c, ctx->http_user, ctx->http_passwd);
+    }
+
     ret = flb_http_do(c, &b_sent);
     if (ret == 0) {
         flb_debug("[out_influxdb] http_do=%i http_status=%i",
                   ret, c->resp.status);
+        if (c->resp.status != 200 && c->resp.status != 204) {
+            if (c->resp.payload_size > 0) {
+                flb_error("[out_influxdb] http_status=%i\n%s",
+                          ret, c->resp.status, c->resp.payload);
+            }
+            else {
+                flb_debug("[out_influxdb] http_status=%i",
+                          ret, c->resp.status);
+            }
+        }
+        flb_debug("[out_influxdb] http_do=%i OK", ret);
     }
     else {
-        flb_debug("[out_influxdb] http_do=%i", ret);
+        flb_warn("[out_influxdb] http_do=%i", ret);
     }
 
     flb_http_client_destroy(c);
@@ -357,12 +491,60 @@ int cb_influxdb_exit(void *data, struct flb_config *config)
 {
     struct flb_influxdb_config *ctx = data;
 
+    if (ctx->http_user) {
+        flb_free(ctx->http_user);
+    }
+    if (ctx->http_passwd) {
+        flb_free(ctx->http_passwd);
+    }
+    if (ctx->tag_keys) {
+        flb_utils_split_free(ctx->tag_keys);
+    }
+
     flb_upstream_destroy(ctx->u);
     flb_free(ctx->db_name);
     flb_free(ctx->seq_name);
     flb_free(ctx);
 
     return 0;
+}
+
+int bool_value(char *v)
+{
+    if (strcasecmp(v, "true") == 0) {
+        return FLB_TRUE;
+    }
+    else if (strcasecmp(v, "on") == 0) {
+        return FLB_TRUE;
+    }
+    else if (strcasecmp(v, "yes") == 0) {
+        return FLB_TRUE;
+    }
+
+    return FLB_FALSE;
+}
+
+int is_tagged_key(struct flb_influxdb_config *ctx, char *key, int kl, int type)
+{
+    if (type == MSGPACK_OBJECT_STR) {
+        if (ctx->auto_tags) {
+            return FLB_TRUE;
+        }
+    }
+
+    struct mk_list *head;
+    struct flb_split_entry *entry;
+
+    if (ctx->tag_keys) {
+        mk_list_foreach(head, ctx->tag_keys) {
+            entry = mk_list_entry(head, struct flb_split_entry ,_head);
+            if (kl == entry->len && strncmp(key, entry->value, kl) == 0) {
+                return FLB_TRUE;
+            }
+        }
+    }
+
+    return FLB_FALSE;
 }
 
 struct flb_output_plugin out_influxdb_plugin = {

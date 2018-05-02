@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -42,6 +42,66 @@
 #include <fluent-bit/flb_plugin_proxy.h>
 #include <fluent-bit/flb_parser.h>
 
+#if defined(_WIN32) || defined(_WIN64)
+#define PATH_MAX 1024
+#endif
+
+/* Libbacktrace support */
+#ifdef FLB_HAVE_LIBBACKTRACE
+#include <backtrace.h>
+#include <backtrace-supported.h>
+
+struct flb_stacktrace {
+    struct backtrace_state *state;
+	int error;
+    int line;
+};
+
+struct flb_stacktrace flb_st;
+
+static void flb_stacktrace_error_callback(void *data,
+                                          const char *msg, int errnum)
+{
+    struct flb_stacktrace *ctx = data;
+    fprintf(stderr, "ERROR: %s (%d)", msg, errnum);
+	ctx->error = 1;
+}
+
+static int flb_stacktrace_print_callback(void *data, uintptr_t pc,
+                                         const char *filename, int lineno,
+                                         const char *function)
+{
+    struct flb_stacktrace *p = data;
+
+    fprintf(stdout, "#%-2i 0x%-17lx in  %s() at %s:%d\n",
+            p->line,
+            (unsigned long) pc,
+            function == NULL ? "???" : function,
+            filename == NULL ? "???" : filename + sizeof(FLB_SOURCE_DIR),
+            lineno);
+    p->line++;
+    return 0;
+}
+
+static inline void flb_stacktrace_init(char *prog)
+{
+    memset(&flb_st, '\0', sizeof(struct flb_stacktrace));
+    flb_st.state = backtrace_create_state(prog,
+                                          BACKTRACE_SUPPORTS_THREADS,
+                                          flb_stacktrace_error_callback, NULL);
+}
+
+void flb_stacktrace_print()
+{
+    struct flb_stacktrace *ctx;
+
+    ctx = &flb_st;
+    backtrace_full(ctx->state, 3, flb_stacktrace_print_callback,
+                   flb_stacktrace_error_callback, ctx);
+}
+
+#endif
+
 #ifdef FLB_HAVE_MTRACE
 #include <mcheck.h>
 #endif
@@ -52,6 +112,9 @@ struct flb_config *config;
 #define PLUGIN_OUTPUT   1
 #define PLUGIN_FILTER   2
 
+#define get_key(a, b, c)   mk_rconf_section_get_key(a, b, c)
+#define n_get_key(a, b, c) (intptr_t) get_key(a, b, c)
+#define s_get_key(a, b, c) (char *) get_key(a, b, c)
 static void flb_help(int rc, struct flb_config *config)
 {
     struct mk_list *head;
@@ -81,7 +144,7 @@ static void flb_help(int rc, struct flb_config *config)
     printf("  -l, --log_file=FILE\twrite log info to a file\n");
     printf("  -t, --tag=TAG\t\tset plugin tag, same as '-p tag=abc'\n");
     printf("  -v, --verbose\t\tenable verbose mode\n");
-#ifdef FLB_HAVE_HTTP
+#ifdef FLB_HAVE_HTTP_SERVER
     printf("  -H, --http\t\tenable monitoring HTTP server\n");
     printf("  -P, --port\t\tset HTTP server TCP port (default: %s)\n",
            FLB_CONFIG_HTTP_PORT);
@@ -136,11 +199,27 @@ static void flb_banner()
     printf("%sCopyright (C) Treasure Data%s\n\n", ANSI_BOLD ANSI_YELLOW, ANSI_RESET);
 }
 
+#define flb_print_signal(X) case X:                       \
+    write (STDERR_FILENO, #X ")\n" , sizeof(#X ")\n")-1); \
+    break;
 
 static void flb_signal_handler(int signal)
 {
-    write(STDERR_FILENO, "[engine] caught signal\n", 23);
+    char s[] = "[engine] caught signal (";
 
+    /* write signal number */
+    write(STDERR_FILENO, s, sizeof(s) - 1);
+    switch (signal) {
+        flb_print_signal(SIGINT);
+#ifndef _WIN32
+        flb_print_signal(SIGQUIT);
+        flb_print_signal(SIGHUP);
+#endif
+        flb_print_signal(SIGTERM);
+        flb_print_signal(SIGSEGV);
+    };
+
+    /* Signal handlers */
     switch (signal) {
     case SIGINT:
 #if !defined(_WIN64) && !defined(_WIN32)
@@ -156,6 +235,11 @@ static void flb_signal_handler(int signal)
     case SIGTERM:
         flb_engine_exit(config);
         break;
+    case SIGSEGV:
+#ifdef FLB_HAVE_LIBBACKTRACE
+        flb_stacktrace_print();
+#endif
+        abort();
     default:
         break;
     }
@@ -169,6 +253,7 @@ static void flb_signal_init()
     signal(SIGHUP,  &flb_signal_handler);
 #endif
     signal(SIGTERM, &flb_signal_handler);
+    signal(SIGSEGV, &flb_signal_handler);
 }
 
 static int input_set_property(struct flb_input_instance *in, char *kv)
@@ -253,6 +338,237 @@ static int filter_set_property(struct flb_filter_instance *filter, char *kv)
     return ret;
 }
 
+static void flb_service_conf_err(struct mk_rconf_section *section, char *key)
+{
+    fprintf(stderr, "Invalid configuration value at %s.%s\n",
+            section->name, key);
+}
+
+static int flb_service_conf_path_set(struct flb_config *config, char *file)
+{
+    char *p;
+    char *end;
+    char path[PATH_MAX + 1];
+
+#if !defined(_WIN32) && !defined(_WIN64)
+    p = realpath(file, path);
+    if (!p) {
+        return -1;
+    }
+#else
+    DWORD  retval = 0;
+
+    retval = GetFullPathName(file, PATH_MAX + 1, path, NULL);
+    if (retval == 0)
+    {
+        return -1;
+    }
+#endif
+
+    /* lookup path ending and truncate */
+    end = strrchr(path, '/');
+    if (!end) {
+        return -1;
+    }
+
+    end++;
+    *end = '\0';
+    config->conf_path = flb_strdup(path);
+
+    return 0;
+}
+
+static int flb_service_conf(struct flb_config *config, char *file)
+{
+    int ret = -1;
+    char *tmp;
+    char *name;
+    struct mk_list *head;
+    struct mk_list *h_prop;
+    struct mk_rconf *fconf = NULL;
+    struct mk_rconf_entry *entry;
+    struct mk_rconf_section *section;
+    struct flb_input_instance *in;
+    struct flb_output_instance *out;
+    struct flb_filter_instance *filter;
+
+    fconf = mk_rconf_open(file);
+    if (!fconf) {
+        return -1;
+    }
+
+    /* Process all meta commands */
+    mk_list_foreach(head, &fconf->metas) {
+        entry = mk_list_entry(head, struct mk_rconf_entry, _head);
+        flb_meta_run(config, entry->key, entry->val);
+    }
+
+    /* Set configuration root path */
+    flb_service_conf_path_set(config, file);
+
+    /* Validate sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+
+        if (strcasecmp(section->name, "SERVICE") == 0 ||
+            strcasecmp(section->name, "INPUT") == 0 ||
+            strcasecmp(section->name, "FILTER") == 0 ||
+            strcasecmp(section->name, "OUTPUT") == 0) {
+
+            /* continue on valid sections */
+            continue;
+        }
+
+        /* Extra sanity checks */
+        if (strcasecmp(section->name, "PARSER") == 0) {
+            fprintf(stderr,
+                    "Section [PARSER] is not valid in the main "
+                    "configuration file. It belongs to \n"
+                    "the Parsers_File configuration files.\n");
+        }
+        else {
+            fprintf(stderr,
+                    "Error: unexpected section [%s] in the main "
+                    "configuration file.\n", section->name);
+        }
+        exit(EXIT_FAILURE);
+    }
+
+    /* Read main [SERVICE] section */
+    section = mk_rconf_section_get(fconf, "SERVICE");
+    if (section) {
+        /* Iterate properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            /* Set the property */
+            flb_config_set_property(config, entry->key, entry->val);
+        }
+    }
+
+
+    /* Read all [INPUT] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "INPUT") != 0) {
+            continue;
+        }
+
+        /* Get the input plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        flb_debug("[service] loading input: %s", name);
+
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        in = flb_input_new(config, tmp, NULL);
+        mk_mem_free(name);
+        if (!in) {
+            fprintf(stderr, "Input plugin '%s' cannot be loaded\n", tmp);
+            mk_mem_free(tmp);
+            goto flb_service_conf_end;
+        }
+        mk_mem_free(tmp);
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            ret = flb_input_set_property(in, entry->key, entry->val);
+            if (ret == -1) {
+                fprintf(stderr, "Error setting up %s plugin property '%s'\n",
+                        in->name, entry->key);
+                goto flb_service_conf_end;
+            }
+        }
+    }
+
+    /* Read all [OUTPUT] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "OUTPUT") != 0) {
+            continue;
+        }
+
+        /* Get the output plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        out = flb_output_new(config, tmp, NULL);
+        mk_mem_free(name);
+        if (!out) {
+            fprintf(stderr, "Output plugin '%s' cannot be loaded\n", tmp);
+            mk_mem_free(tmp);
+            goto flb_service_conf_end;
+        }
+        mk_mem_free(tmp);
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            flb_output_set_property(out, entry->key, entry->val);
+        }
+    }
+
+    /* Read all [FILTER] sections */
+    mk_list_foreach(head, &fconf->sections) {
+        section = mk_list_entry(head, struct mk_rconf_section, _head);
+        if (strcasecmp(section->name, "FILTER") != 0) {
+            continue;
+        }
+        /* Get the filter plugin name */
+        name = s_get_key(section, "Name", MK_RCONF_STR);
+        if (!name) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+        /* Create an instace of the plugin */
+        tmp = flb_env_var_translate(config->env, name);
+        filter = flb_filter_new(config, tmp, NULL);
+        mk_mem_free(tmp);
+        mk_mem_free(name);
+        if (!filter) {
+            flb_service_conf_err(section, "Name");
+            goto flb_service_conf_end;
+        }
+
+        /* Iterate other properties */
+        mk_list_foreach(h_prop, &section->entries) {
+            entry = mk_list_entry(h_prop, struct mk_rconf_entry, _head);
+            if (strcasecmp(entry->key, "Name") == 0) {
+                continue;
+            }
+
+            /* Set the property */
+            flb_filter_set_property(filter, entry->key, entry->val);
+        }
+    }
+
+    ret = 0;
+
+ flb_service_conf_end:
+    if (fconf != NULL) {
+        mk_rconf_free(fconf);
+    }
+    return ret;
+}
 int main(int argc, char **argv)
 {
     int opt;
@@ -268,6 +584,9 @@ int main(int argc, char **argv)
     struct flb_filter_instance *filter = NULL;
 
 #if !defined(_WIN64) && !defined(_WIN32)
+#ifdef FLB_HAVE_LIBBACKTRACE
+    flb_stacktrace_init(argv[0]);
+#endif
     /* Setup long-options */
     static const struct option long_opts[] = {
         { "buf_path",    required_argument, NULL, 'b' },
@@ -293,6 +612,11 @@ int main(int argc, char **argv)
         { "quiet",       no_argument      , NULL, 'q' },
         { "help",        no_argument      , NULL, 'h' },
         { "sosreport",   no_argument      , NULL, 'S' },
+#ifdef FLB_HAVE_HTTP_SERVER
+        { "http_server", no_argument      , NULL, 'H' },
+        { "http_listen", required_argument, NULL, 'L' },
+        { "http_port",   required_argument, NULL, 'P' },
+#endif
         { NULL, 0, NULL, 0 }
     };
 #endif
@@ -432,11 +756,20 @@ int main(int argc, char **argv)
         case 'h':
             flb_help(EXIT_SUCCESS, config);
             break;
-#ifdef FLB_HAVE_HTTP
+#ifdef FLB_HAVE_HTTP_SERVER
         case 'H':
             config->http_server = FLB_TRUE;
             break;
+        case 'L':
+            if (config->http_listen) {
+                flb_free(config->http_listen);
+            }
+            config->http_listen = flb_strdup(optarg);
+            break;
         case 'P':
+            if (config->http_port) {
+                flb_free(config->http_port);
+            }
             config->http_port = flb_strdup(optarg);
             break;
 #endif
@@ -504,6 +837,10 @@ int main(int argc, char **argv)
     }
 #endif
 
-    flb_engine_start(config);
+    ret = flb_engine_start(config);
+    if (ret == -1) {
+        flb_engine_shutdown(config);
+    }
+
     return 0;
 }

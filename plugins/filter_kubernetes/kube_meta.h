@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@
 
 #ifndef FLB_FILTER_KUBE_META_H
 #define FLB_FILTER_KUBE_META_H
+
+#include "kube_props.h"
 
 struct flb_kube;
 
@@ -57,7 +59,8 @@ int flb_kube_meta_get(struct flb_kube *ctx,
                       char *tag, int tag_len,
                       char *data, size_t data_size,
                       char **out_buf, size_t *out_size,
-                      struct flb_kube_meta *meta);
+                      struct flb_kube_meta *meta,
+                      struct flb_kube_props *props);
 int flb_kube_meta_release(struct flb_kube_meta *meta);
 
 #endif

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -35,9 +35,11 @@ struct query_status {
 /* Open or create database required by tail plugin */
 struct flb_sqldb *flb_tail_db_open(char *path,
                                    struct flb_input_instance *in,
+                                   struct flb_tail_config *ctx,
                                    struct flb_config *config)
 {
     int ret;
+    char tmp[64];
     struct flb_sqldb *db;
 
     /* Open/create the database */
@@ -52,6 +54,17 @@ struct flb_sqldb *flb_tail_db_open(char *path,
         flb_error("[in_tail:db] could not create 'track' table");
         flb_sqldb_close(db);
         return NULL;
+    }
+
+    if (ctx->db_sync >= 0) {
+        snprintf(tmp, sizeof(tmp) - 1, SQL_PRAGMA_SYNC,
+                 ctx->db_sync);
+        ret = flb_sqldb_query(db, tmp, NULL, NULL);
+        if (ret != FLB_OK) {
+            flb_error("[in_tail:db] could not set pragma 'sync'");
+            flb_sqldb_close(db);
+            return NULL;
+        }
     }
 
     return db;

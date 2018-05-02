@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -44,11 +44,13 @@ struct flb_systemd_config {
     sd_journal *j;   /* Journal context */
     char *cursor;
     char *path;
+    int pending_records;
 
     /* Internal */
     int ch_manager[2];         /* pipe: channel manager    */
     int coll_fd_archive;       /* archive collector        */
     int coll_fd_journal;       /* journal, events mode     */
+    int coll_fd_pending;       /* pending records          */
     int dynamic_tag;
     int max_entries;
     struct flb_sqldb *db;

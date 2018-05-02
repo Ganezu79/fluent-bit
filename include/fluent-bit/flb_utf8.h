@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ static const char trailingBytesForUTF8[256] = {
 };
 
 /* returns length of next utf-8 sequence */
-int flb_utf8_len(char *s)
+static int flb_utf8_len(char *s)
 {
     return trailingBytesForUTF8[(unsigned int)(unsigned char)s[0]] + 1;
 }
@@ -86,7 +86,7 @@ static inline uint32_t flb_utf8_decode(uint32_t *state, uint32_t *codep,
 }
 
 
-void flb_utf8_print(uint8_t *s) {
+static void flb_utf8_print(uint8_t *s) {
     uint32_t codepoint;
     uint32_t state = 0;
 

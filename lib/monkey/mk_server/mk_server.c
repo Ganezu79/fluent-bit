@@ -200,6 +200,7 @@ struct mk_list *mk_server_listen_init(struct mk_server *server)
                 listener->protocol = protocol;
             }
 
+#ifdef MK_HAVE_HTTP2
             if (listen->flags & MK_CAP_HTTP2) {
                 protocol = mk_sched_handler_cap(MK_CAP_HTTP2);
                 if (!protocol) {
@@ -208,7 +209,7 @@ struct mk_list *mk_server_listen_init(struct mk_server *server)
                 }
                 listener->protocol = protocol;
             }
-
+#endif
             listener->network = mk_plugin_cap(MK_CAP_SOCK_PLAIN, server);
 
             if (listen->flags & MK_CAP_SOCK_TLS) {
@@ -301,10 +302,10 @@ void mk_server_loop_balancer(struct mk_server *server)
                  * Accept connection: determinate which thread may work on this
                  * new connection.
                  */
-                sched = mk_sched_next_target();
+                sched = mk_sched_next_target(server);
                 if (sched != NULL) {
                     mk_server_listen_handler(sched, event, server);
-#ifdef MK_TRACE
+#ifdef MK_HAVE_TRACE
                     int i;
                     struct mk_sched_ctx *ctx = server->sched_ctx;
 

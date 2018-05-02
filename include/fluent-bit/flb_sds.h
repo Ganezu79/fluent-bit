@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -28,9 +28,14 @@
 #include <fluent-bit/flb_info.h>
 
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 
 #define FLB_SDS_HEADER_SIZE (sizeof(uint64_t) + sizeof(uint64_t))
+
+#if defined(_WIN64) || defined(_WIN32)
+#define __attribute__(x)
+#endif
 
 typedef char *flb_sds_t;
 
@@ -47,6 +52,11 @@ static inline size_t flb_sds_len(flb_sds_t s)
     return FLB_SDS_HEADER(s)->len;
 }
 
+static inline void flb_sds_len_set(flb_sds_t s, size_t len)
+{
+    FLB_SDS_HEADER(s)->len = len;
+}
+
 static inline size_t flb_sds_alloc(flb_sds_t s)
 {
     return FLB_SDS_HEADER(s)->alloc;
@@ -60,10 +70,22 @@ static inline size_t flb_sds_avail(flb_sds_t s)
     return (h->alloc - h->len);
 }
 
+static inline int flb_sds_cmp(flb_sds_t s, char *str, int len)
+{
+    if (flb_sds_len(s) != len) {
+        return -1;
+    }
+
+    return strncmp(s, str, len);
+}
+
 flb_sds_t flb_sds_create(char *str);
 flb_sds_t flb_sds_create_len(char *str, int len);
 flb_sds_t flb_sds_create_size(size_t size);
 flb_sds_t flb_sds_cat(flb_sds_t s, char *str, int len);
+flb_sds_t flb_sds_increase(flb_sds_t s, size_t len);
+flb_sds_t flb_sds_copy(flb_sds_t s, char *str, int len);
+
 int flb_sds_destroy(flb_sds_t s);
 
 #endif

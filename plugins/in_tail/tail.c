@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -59,14 +59,12 @@ static int in_tail_collect_pending(struct flb_input_instance *i_ins,
                                    struct flb_config *config, void *in_context)
 {
     int ret;
+    int active = 0;
     struct mk_list *tmp;
     struct mk_list *head;
     struct flb_tail_config *ctx = in_context;
     struct flb_tail_file *file;
     struct stat st;
-
-    /* Consumme signal byte */
-    consume_byte(ctx->ch_pending[0]);
 
     /* Iterate promoted event files with pending bytes */
     mk_list_foreach_safe(head, tmp, &ctx->files_event) {
@@ -97,13 +95,18 @@ static int in_tail_collect_pending(struct flb_input_instance *i_ins,
              */
             if (file->offset < st.st_size) {
                 file->pending_bytes = (st.st_size - file->offset);
-                tail_signal_pending(ctx);
+                active++;
             }
             else {
                 file->pending_bytes = 0;
             }
             break;
         }
+    }
+
+    /* If no more active files, consume pending signal so we don't get called again. */
+    if (active == 0) {
+        tail_consume_pending(ctx);
     }
 
     return 0;
@@ -289,12 +292,8 @@ static void in_tail_pause(void *data, struct flb_config *config)
      * Pause general collectors:
      *
      * - static : static files lookup before promotion
-     * - scan   : scan path to find new files
-     * - rotated: rotate files lookup
      */
     flb_input_collector_pause(ctx->coll_fd_static, ctx->i_ins);
-    flb_input_collector_pause(ctx->coll_fd_scan, ctx->i_ins);
-    flb_input_collector_pause(ctx->coll_fd_rotated, ctx->i_ins);
     flb_input_collector_pause(ctx->coll_fd_pending, ctx->i_ins);
 
     if (ctx->multiline == FLB_TRUE) {
@@ -310,8 +309,6 @@ static void in_tail_resume(void *data, struct flb_config *config)
     struct flb_tail_config *ctx = data;
 
     flb_input_collector_resume(ctx->coll_fd_static, ctx->i_ins);
-    flb_input_collector_resume(ctx->coll_fd_scan, ctx->i_ins);
-    flb_input_collector_resume(ctx->coll_fd_rotated, ctx->i_ins);
     flb_input_collector_resume(ctx->coll_fd_pending, ctx->i_ins);
 
     if (ctx->multiline == FLB_TRUE) {

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -242,7 +242,7 @@ static int process_chunked_data(struct flb_http_client *c)
 
     /* 3. Remove chunk ending \r\n */
     drop = 2;
-    r->chunk_processed_end += abs(val - 2);
+    r->chunk_processed_end += labs(val - 2);
     len = r->data_len - (r->chunk_processed_end - r->data);
     consume_bytes(r->chunk_processed_end, drop, len);
     r->data_len -= drop;
@@ -322,7 +322,14 @@ static int process_data(struct flb_http_client *c)
     }
 
     /* Re-check if an ending exists, if so process payload if required */
-    if (c->resp.headers_end && c->resp.payload) {
+    if (c->resp.headers_end) {
+        /* Mark the payload */
+        if (!c->resp.payload &&
+            c->resp.headers_end - c->resp.data < c->resp.data_len) {
+            c->resp.payload = c->resp.headers_end;
+            c->resp.payload_size = (c->resp.data_len - (c->resp.headers_end - c->resp.data));
+        }
+
         if (c->resp.content_length >= 0) {
             c->resp.payload_size = c->resp.data_len;
             c->resp.payload_size -= (c->resp.headers_end - c->resp.data);
@@ -338,6 +345,9 @@ static int process_data(struct flb_http_client *c)
             else if (ret == FLB_HTTP_OK) {
                 return FLB_HTTP_OK;
             }
+        }
+        else {
+            return FLB_HTTP_OK;
         }
     }
     else if (c->resp.headers_end && c->resp.content_length <= 0) {
@@ -449,7 +459,7 @@ struct flb_http_client *flb_http_client(struct flb_upstream_conn *u_conn,
 
     buf = flb_calloc(1, FLB_HTTP_BUF_SIZE);
     if (!buf) {
-        perror("malloc");
+        flb_errno();
         return NULL;
     }
 
@@ -478,7 +488,7 @@ struct flb_http_client *flb_http_client(struct flb_upstream_conn *u_conn,
     }
 
     if (ret == -1) {
-        perror("snprintf");
+        flb_errno();
         flb_free(buf);
         return NULL;
     }

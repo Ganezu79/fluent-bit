@@ -26,11 +26,14 @@ $ bin/fluent-bit -i cpu -o stdout
 | CPU                | cpu     | gather CPU usage between snapshots of one second. It support multiple cores     |
 | Disk               | disk    | usage of block device |
 | Dummy              | dummy   | generates dummy event |
+| Exec               | exec    | executes external program and collects event logs |
 | Forward            | forward | [Fluentd](http://fluentd.org) forward protocol |
 | Memory             | mem     | usage of system memory |
 | MQTT               | mqtt    | start a MQTT server and receive publish messages |
 | Netif              | netif   | usage of network interface |
 | Kernel Ring Buffer | kmsg    | read Linux Kernel messages, same behavior as the __dmesg__ command line program |
+| Syslog             | syslog  | read messages from a syslog daemon | 
+| Systemd/Journald   | systemd | read messages from journald, part of the systemd suite |
 | Serial Port        | serial  | read from serial port |
 | Standard Input     | stdin   | read from the standard input |
 | Head               | head    | read first part of files |

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #define ES_BULK_CHUNK      4096  /* Size of buffer chunks    */
 #define ES_BULK_HEADER      128  /* ES Bulk API prefix line  */
 #define ES_BULK_INDEX_FMT   "{\"index\":{\"_index\":\"%s\",\"_type\":\"%s\"}}\n"
+#define ES_BULK_INDEX_FMT_ID "{\"index\":{\"_index\":\"%s\",\"_type\":\"%s\",\"_id\":\"%s\"}}\n"
 
 struct es_bulk {
     char *ptr;

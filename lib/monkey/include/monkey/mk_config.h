@@ -26,6 +26,9 @@
 #include <monkey/mk_core.h>
 #include <rbtree.h>
 
+#include <monkey/mk_info.h>
+#include "../../deps/rbtree/rbtree.h"
+
 #ifndef O_NOATIME
 #define O_NOATIME       01000000
 #endif
@@ -41,7 +44,12 @@
 
 /* Core capabilities, used as identifiers to match plugins */
 #define MK_CAP_HTTP        1
+
+/* HTTP/2: only if enabled */
+#ifdef MK_HAVE_HTTP2
 #define MK_CAP_HTTP2       2
+#endif
+
 #define MK_CAP_SOCK_PLAIN  4
 #define MK_CAP_SOCK_TLS    8
 

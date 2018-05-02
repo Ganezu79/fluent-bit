@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -114,9 +114,9 @@ static int mqtt_data_append(char *topic, size_t topic_len,
                             void *in_context)
 {
     int i;
-    int out;
     int ret;
     int n_size;
+    size_t out;
     size_t off = 0;
     char *pack;
     msgpack_object root;

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit Demo
  *  ===============
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -28,6 +28,12 @@ struct flb_lib_ctx {
     struct mk_event_loop *event_loop;
     struct mk_event *event_channel;
     struct flb_config *config;
+};
+
+/* Used on out_lib to define a callback and further opaque data */
+struct flb_lib_out_cb {
+    int (*cb) (void *record, size_t size, void *data);
+    void *data;
 };
 
 /* For Fluent Bit library callers, we only export the following symbols */

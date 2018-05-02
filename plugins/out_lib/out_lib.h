@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -29,9 +29,10 @@ enum {
 #define FLB_FMT_STR_MSGPACK "msgpack"
 #define FLB_FMT_STR_JSON    "json"
 
-struct flb_out_lib_config{
+struct flb_out_lib_config {
     int format;
-    int (*user_callback)(void* data, size_t size);
+    int (*cb_func)(void *record, size_t size, void *data);
+    void *cb_data;
 };
 
 #endif

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -45,12 +45,29 @@ static inline int tail_signal_pending(struct flb_tail_config *ctx)
 
     /* Insert a dummy event into the 'pending' channel */
     n = write(ctx->ch_pending[1], &val, sizeof(val));
-    if (n == -1) {
+    /* If we get EAGAIN, it simply means pending channel is full. As notification is already pending, it's safe to ignore. */
+    if (n == -1 && errno != EAGAIN) {
         flb_errno();
         return -1;
     }
 
     return n;
+}
+
+static inline int tail_consume_pending(struct flb_tail_config *ctx) {
+    int ret;
+    uint64_t val;
+
+    /* We need to consume the pending bytes. Loop until we would have blocked (pipe is empty). */
+    while (errno != EAGAIN) {
+        ret = read(ctx->ch_pending[0], &val, sizeof(val));
+        if (ret <= 0 && errno != EAGAIN) {
+            flb_errno();
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 #endif

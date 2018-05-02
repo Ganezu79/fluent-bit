@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -73,8 +73,9 @@ static int in_syslog_collect_udp(struct flb_input_instance *i_ins,
     struct flb_syslog *ctx = in_context;
     (void) i_ins;
 
-    bytes = recvfrom(ctx->server_fd, buf, sizeof(buf), 0, NULL, NULL);
+    bytes = recvfrom(ctx->server_fd, buf, sizeof(buf) - 1, 0, NULL, NULL);
     if (bytes > 0) {
+        buf[bytes] = '\0';
         syslog_prot_process_udp(buf, bytes, ctx);
     }
     else {

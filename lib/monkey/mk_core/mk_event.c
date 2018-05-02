@@ -2,7 +2,7 @@
 
 /*  Monkey HTTP Server
  *  ==================
- *  Copyright 2001-2015 Monkey Software LLC <eduardo@monkey.io>
+ *  Copyright 2001-2017 Eduardo Silva <eduardo@monkey.io>
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -134,6 +134,15 @@ int mk_event_timeout_create(struct mk_event_loop *loop,
 
     ctx = loop->data;
     return _mk_event_timeout_create(ctx, sec, nsec, data);
+}
+
+/* Destroy timer */
+int mk_event_timeout_destroy(struct mk_event_loop *loop, void *data)
+{
+    struct mk_event_ctx *ctx;
+
+    ctx = loop->data;
+    return _mk_event_timeout_destroy(ctx, data);
 }
 
 /* Create a new channel to distribute signals */

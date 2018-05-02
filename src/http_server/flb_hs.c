@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -46,7 +46,6 @@ struct flb_hs *flb_hs_create(char *listen, char *tcp_port,
                              struct flb_config *config)
 {
     int vid;
-    char *iface;
     char tmp[32];
     struct flb_hs *hs;
 
@@ -105,6 +104,10 @@ int flb_hs_start(struct flb_hs *hs)
 
 int flb_hs_destroy(struct flb_hs *hs)
 {
+    if (!hs) {
+        return 0;
+    }
+
     mk_stop(hs->ctx);
     mk_destroy(hs->ctx);
 

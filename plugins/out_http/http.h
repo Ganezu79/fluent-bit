@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@
 #ifndef FLB_OUT_HTTP_H
 #define FLB_OUT_HTTP_H
 
-#define FLB_HTTP_OUT_MSGPACK    0
-#define FLB_HTTP_OUT_JSON       1
+#define FLB_HTTP_OUT_MSGPACK        0
+#define FLB_HTTP_OUT_JSON           1
+#define FLB_HTTP_OUT_JSON_STREAM    2
 
 #define FLB_HTTP_CONTENT_TYPE   "Content-Type"
 #define FLB_HTTP_MIME_MSGPACK   "application/msgpack"
@@ -39,11 +40,13 @@ struct flb_out_http_config {
 
     /* Output format */
     int out_format;
+    char *json_date_key;
+    size_t json_date_key_len;
 
     /* HTTP URI */
     char *uri;
     char *host;
-    int  port;
+    int port;
 
     /* Upstream connection to the backend server */
     struct flb_upstream *u;

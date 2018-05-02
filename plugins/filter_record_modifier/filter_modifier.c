@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 #define PLUGIN_NAME "filter_record_modifier"
 
 static int configure(struct record_modifier_ctx *ctx,
-                     struct flb_filter_instance *f_ins)
+                         struct flb_filter_instance *f_ins)
 {
     struct mk_list *head = NULL;
     struct mk_list *split;
@@ -51,6 +51,13 @@ static int configure(struct record_modifier_ctx *ctx,
             mod_key = flb_malloc(sizeof(struct modifier_key));
             mod_key->key     = prop->val;
             mod_key->key_len = strlen(prop->val);
+            if (mod_key->key[mod_key->key_len - 1] == '*') {
+                mod_key->dynamic_key = FLB_TRUE;
+                mod_key->key_len--;
+            }
+            else {
+                mod_key->dynamic_key = FLB_FALSE;
+            }
             mk_list_add(&mod_key->_head, &ctx->remove_keys);
             ctx->remove_keys_num++;
         }
@@ -58,6 +65,13 @@ static int configure(struct record_modifier_ctx *ctx,
             mod_key = flb_malloc(sizeof(struct modifier_key));
             mod_key->key     = prop->val;
             mod_key->key_len = strlen(prop->val);
+            if (mod_key->key[mod_key->key_len - 1] == '*') {
+                mod_key->dynamic_key = FLB_TRUE;
+                mod_key->key_len--;
+            }
+            else {
+                mod_key->dynamic_key = FLB_FALSE;
+            }
             mk_list_add(&mod_key->_head, &ctx->whitelist_keys);
             ctx->whitelist_keys_num++;
         }
@@ -122,8 +136,8 @@ static int delete_list(struct record_modifier_ctx *ctx)
 
 
 static int cb_modifier_init(struct flb_filter_instance *f_ins,
-                        struct flb_config *config,
-                        void *data)
+                                struct flb_config *config,
+                                void *data)
 {
     struct record_modifier_ctx *ctx = NULL;
 
@@ -148,7 +162,7 @@ static int cb_modifier_init(struct flb_filter_instance *f_ins,
 }
 
 static int make_bool_map(struct record_modifier_ctx *ctx, msgpack_object *map,
-                         bool_map_t *bool_map, int map_num)
+                             bool_map_t *bool_map, int map_num)
 {
     struct mk_list *tmp;
     struct mk_list *head;
@@ -185,15 +199,21 @@ static int make_bool_map(struct record_modifier_ctx *ctx, msgpack_object *map,
             mk_list_foreach_safe(head, tmp, check) {
                 mod_key = mk_list_entry(head, struct modifier_key,  _head);
                 if (key->via.bin.size != mod_key->key_len &&
-                    key->via.str.size != mod_key->key_len) {
+                    key->via.str.size != mod_key->key_len &&
+                    mod_key->dynamic_key == FLB_FALSE) {
+                    continue;
+                }
+                if (key->via.bin.size < mod_key->key_len &&
+                    key->via.str.size < mod_key->key_len &&
+                    mod_key->dynamic_key == FLB_TRUE) {
                     continue;
                 }
                 if ((key->type == MSGPACK_OBJECT_BIN &&
                      !strncasecmp(key->via.bin.ptr, mod_key->key,
-                                 mod_key->key_len)) ||
+                                  mod_key->key_len)) ||
                     (key->type == MSGPACK_OBJECT_STR &&
                      !strncasecmp(key->via.str.ptr, mod_key->key,
-                                 mod_key->key_len))
+                                  mod_key->key_len))
                     ) {
                     result = FLB_TRUE;
                     break;
@@ -210,11 +230,11 @@ static int make_bool_map(struct record_modifier_ctx *ctx, msgpack_object *map,
 }
 
 static int cb_modifier_filter(void *data, size_t bytes,
-                          char *tag, int tag_len,
-                          void **out_buf, size_t *out_size,
-                          struct flb_filter_instance *f_ins,
-                          void *context,
-                          struct flb_config *config)
+                                  char *tag, int tag_len,
+                                  void **out_buf, size_t *out_size,
+                                  struct flb_filter_instance *f_ins,
+                                  void *context,
+                                  struct flb_config *config)
 {
     struct record_modifier_ctx *ctx = context;
     char is_modified = FLB_FALSE;
@@ -255,7 +275,8 @@ static int cb_modifier_filter(void *data, size_t bytes,
             map_num = obj->via.map.size;
             removed_map_num = make_bool_map(ctx, obj,
                                             bool_map, obj->via.map.size);
-        } else {
+        }
+        else {
             continue;
         }
 

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -27,8 +27,13 @@ struct flb_in_fw_config {
     int server_fd;               /* TCP server file descriptor  */
     size_t buffer_max_size;      /* Max Buffer size             */
     size_t buffer_chunk_size;    /* Chunk allocation size       */
+
+    /* Network */
     char *listen;                /* Listen interface            */
     char *tcp_port;              /* TCP Port                    */
+
+    /* Unix Socket (TCP only) */
+    char *unix_path;             /* Unix path for socket        */
 
     struct mk_list connections;    /* List of active connections */
     struct mk_event_loop *evl;     /* Event loop file descriptor */

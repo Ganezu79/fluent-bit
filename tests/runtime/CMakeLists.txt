@@ -31,7 +31,9 @@ endif()
 if(FLB_IN_LIB AND FLB_OUT_LIB)
   FLB_RT_TEST(FLB_FILTER_STDOUT     "filter_stdout.c")
   FLB_RT_TEST(FLB_FILTER_GREP       "filter_grep.c")
+  FLB_RT_TEST(FLB_FILTER_THROTTLE   "filter_throttle.c")
   FLB_RT_TEST(FLB_FILTER_KUBERNETES "filter_kubernetes.c")
+  FLB_RT_TEST(FLB_FILTER_PARSER     "filter_parser.c")
 endif()
 
 
@@ -51,6 +53,7 @@ if(FLB_IN_LIB)
   FLB_RT_TEST(FLB_OUT_TD           "out_td.c")
 endif()
 
+set(FLB_TESTS_DATA_PATH ${CMAKE_CURRENT_SOURCE_DIR}/)
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/flb_tests_runtime.h.in"
   "${CMAKE_CURRENT_SOURCE_DIR}/flb_tests_runtime.h"

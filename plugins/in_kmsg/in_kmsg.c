@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -159,7 +159,7 @@ static inline int process_line(char *line,
     tv.tv_sec  = val/1000000;
     tv.tv_usec = val - (tv.tv_sec * 1000000);
 
-    flb_time_set(&ts, ctx->boot_time.tv_sec + tv.tv_sec, tv.tv_usec);
+    flb_time_set(&ts, ctx->boot_time.tv_sec + tv.tv_sec, tv.tv_usec * 1000);
 
     /* Now process the human readable message */
     p = strchr(p, ';');

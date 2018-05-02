@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include <fluent-bit/flb_input.h>
 
 #include <stdlib.h>
+#include <fcntl.h>
 
 #include "tail_fs.h"
 #include "tail_db.h"
@@ -34,6 +35,7 @@ struct flb_tail_config *flb_tail_config_create(struct flb_input_instance *i_ins,
 {
     int ret;
     int sec;
+    int i;
     long nsec;
     ssize_t bytes;
     char *tmp;
@@ -47,6 +49,7 @@ struct flb_tail_config *flb_tail_config_create(struct flb_input_instance *i_ins,
     ctx->dynamic_tag = FLB_FALSE;
     ctx->ignore_older = 0;
     ctx->skip_long_lines = FLB_FALSE;
+    ctx->db_sync = -1;
 
     /* Create the channel manager */
     ret = pipe(ctx->ch_manager);
@@ -59,11 +62,18 @@ struct flb_tail_config *flb_tail_config_create(struct flb_input_instance *i_ins,
     /* Create the pending channel */
     ret = pipe(ctx->ch_pending);
     if (ret == -1) {
-        close(ctx->ch_manager[0]);
-        close(ctx->ch_manager[1]);
         flb_errno();
-        flb_free(ctx);
+        flb_tail_config_destroy(ctx);
         return NULL;
+    }
+    /* Make pending channel non-blocking */
+    for (i = 0; i <= 1; i++) {
+        ret = fcntl(ctx->ch_pending[i], F_SETFL, fcntl(ctx->ch_pending[i], F_GETFL) | O_NONBLOCK);
+        if (ret == -1) {
+            flb_errno();
+            flb_tail_config_destroy(ctx);
+            return NULL;
+        }
     }
 
     /* Config: path/pattern to read files */
@@ -231,10 +241,30 @@ struct flb_tail_config *flb_tail_config_create(struct flb_input_instance *i_ins,
     }
     i_ins->flags |= FLB_INPUT_DYN_TAG;
 
+    /* Database options (needs to be set before the context) */
+    tmp = flb_input_get_property("db.sync", i_ins);
+    if (tmp) {
+        if (strcasecmp(tmp, "extra") == 0) {
+            ctx->db_sync = 3;
+        }
+        else if (strcasecmp(tmp, "full") == 0) {
+            ctx->db_sync = 2;
+            }
+        else if (strcasecmp(tmp, "normal") == 0) {
+            ctx->db_sync = 1;
+        }
+        else if (strcasecmp(tmp, "off") == 0) {
+            ctx->db_sync = 0;
+        }
+        else {
+            flb_error("[in_tail] invalid database 'db.sync' value");
+        }
+    }
+
     /* Initialize database */
     tmp = flb_input_get_property("db", i_ins);
     if (tmp) {
-        ctx->db = flb_tail_db_open(tmp, i_ins, config);
+        ctx->db = flb_tail_db_open(tmp, i_ins, ctx, config);
         if (!ctx->db) {
             flb_error("[in_tail] could not open/create database");
         }
@@ -257,7 +287,9 @@ int flb_tail_config_destroy(struct flb_tail_config *config)
         flb_tail_db_close(config->db);
     }
 
-    flb_free(config->key);
+    if (config->key != NULL) {
+        flb_free(config->key);
+    }
     flb_free(config);
     return 0;
 }

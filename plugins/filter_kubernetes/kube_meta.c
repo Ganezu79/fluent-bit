@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -31,8 +31,10 @@
 #include <unistd.h>
 #endif
 #include <msgpack.h>
+
 #include "kube_conf.h"
 #include "kube_meta.h"
+#include "kube_property.h"
 
 static int file_to_buffer(char *path, char **out_buf, size_t *out_size)
 {
@@ -92,7 +94,7 @@ static int get_local_pod_info(struct flb_kube *ctx)
          * If it fails, it's just informational, as likely the caller
          * wanted to connect using the Proxy instead from inside a POD.
          */
-        flb_error("[filter_kube] cannot open %s", FLB_KUBE_NAMESPACE);
+        flb_warn("[filter_kube] cannot open %s", FLB_KUBE_NAMESPACE);
         return FLB_FALSE;
     }
 
@@ -143,7 +145,7 @@ static int get_api_server_info(struct flb_kube *ctx,
     size_t b_sent;
     char uri[1024];
     char *buf;
-    int size;
+    size_t size;
     struct flb_http_client *c;
     struct flb_upstream_conn *u_conn;
 
@@ -173,7 +175,9 @@ static int get_api_server_info(struct flb_kube *ctx,
 
     flb_http_add_header(c, "User-Agent", 10, "Fluent-Bit", 10);
     flb_http_add_header(c, "Connection", 10, "close", 5);
-    flb_http_add_header(c, "Authorization", 13, ctx->auth, ctx->auth_len);
+    if (ctx->auth_len > 0) {
+        flb_http_add_header(c, "Authorization", 13, ctx->auth, ctx->auth_len);
+    }
 
     /* Perform request */
     ret = flb_http_do(c, &b_sent);
@@ -246,7 +250,7 @@ static void cb_results(unsigned char *name, unsigned char *value,
     return;
 }
 
-static int merge_meta(struct flb_kube_meta *meta,
+static int merge_meta(struct flb_kube_meta *meta, struct flb_kube *ctx,
                       char *api_buf, size_t api_size,
                       char **out_buf, size_t *out_size)
 {
@@ -270,6 +274,8 @@ static int merge_meta(struct flb_kube_meta *meta,
     msgpack_object meta_val;
     msgpack_object spec_val;
     msgpack_object api_map;
+    msgpack_object ann_map;
+    struct flb_kube_props props = {0};
 
     /*
      * - reg_buf: is a msgpack Map containing meta captured using Regex
@@ -362,7 +368,9 @@ static int merge_meta(struct flb_kube_meta *meta,
 
         else if (size == 11 && strncmp(ptr, "annotations", 11) == 0) {
             have_annotations = i;
-            map_size++;
+            if (ctx->annotations == FLB_TRUE) {
+                map_size++;
+            }
         }
 
         if (have_uid >= 0 && have_labels >= 0 && have_annotations >= 0) {
@@ -415,7 +423,7 @@ static int merge_meta(struct flb_kube_meta *meta,
         msgpack_pack_object(&mp_pck, v);
     }
 
-    if (have_annotations >= 0) {
+    if (have_annotations >= 0 && ctx->annotations == FLB_TRUE) {
         k = meta_val.via.map.ptr[have_annotations].key;
         v = meta_val.via.map.ptr[have_annotations].val;
 
@@ -431,9 +439,43 @@ static int merge_meta(struct flb_kube_meta *meta,
         msgpack_pack_object(&mp_pck, v);
     }
 
+    /* Process configuration suggested through Annotations */
+    if (have_annotations >= 0) {
+        ann_map = meta_val.via.map.ptr[have_annotations].val;
+
+        /* Iterate annotations keys and look for 'logging' key */
+        if (ann_map.type == MSGPACK_OBJECT_MAP) {
+            for (i = 0; i < ann_map.via.map.size; i++) {
+                k = ann_map.via.map.ptr[i].key;
+                v = ann_map.via.map.ptr[i].val;
+
+                if (k.via.str.size > 13 && /* >= 'fluentbit.io/' */
+                    strncmp(k.via.str.ptr, "fluentbit.io/", 13) == 0) {
+
+                    /* Validate and set the property */
+                    flb_kube_prop_set(ctx, meta,
+                                      (char *) k.via.str.ptr + 13,
+                                      k.via.str.size - 13,
+                                      (char *) v.via.str.ptr,
+                                      v.via.str.size,
+                                      &props);
+                }
+            }
+        }
+
+        /* Pack Annotation properties */
+        void *prop_buf;
+        size_t prop_size;
+        flb_kube_prop_pack(&props, &prop_buf, &prop_size);
+        msgpack_sbuffer_write(&mp_sbuf, prop_buf, prop_size);
+        flb_kube_prop_destroy(&props);
+        flb_free(prop_buf);
+    }
+
     msgpack_unpacked_destroy(&api_result);
     msgpack_unpacked_destroy(&meta_result);
 
+    /* Set outgoing msgpack buffer */
     *out_buf = mp_sbuf.data;
     *out_size = mp_sbuf.size;
 
@@ -507,6 +549,7 @@ static inline int extract_meta(struct flb_kube *ctx, char *tag, int tag_len,
     }
 
     if (n <= 0) {
+        flb_warn("[filter_kube] invalid pattern for given tag %s", tag);
         return -1;
     }
 
@@ -562,7 +605,7 @@ static int get_and_merge_meta(struct flb_kube *ctx, struct flb_kube_meta *meta,
         return -1;
     }
 
-    ret = merge_meta(meta,
+    ret = merge_meta(meta, ctx,
                      api_buf, api_size,
                      &merge_buf, &merge_size);
     flb_free(api_buf);
@@ -680,8 +723,13 @@ int flb_kube_meta_init(struct flb_kube *ctx, struct flb_config *config)
     ret = get_api_server_info(ctx, ctx->namespace, ctx->podname,
                               &meta_buf, &meta_size);
     if (ret == -1) {
-        flb_error("[filter_kube] could not get meta for POD %s",
-                  ctx->podname);
+        if (!ctx->podname) {
+            flb_warn("[filter_kube] could not get meta for local POD");
+        }
+        else {
+            flb_warn("[filter_kube] could not get meta for POD %s",
+                     ctx->podname);
+        }
         return -1;
     }
     flb_info("[filter_kube] API server connectivity OK");
@@ -695,12 +743,15 @@ int flb_kube_meta_get(struct flb_kube *ctx,
                       char *tag, int tag_len,
                       char *data, size_t data_size,
                       char **out_buf, size_t *out_size,
-                      struct flb_kube_meta *meta)
+                      struct flb_kube_meta *meta,
+                      struct flb_kube_props *props)
 {
     int id;
     int ret;
     char *hash_meta_buf;
+    size_t off = 0;
     size_t hash_meta_size;
+    msgpack_unpacked result;
 
     if (ctx->dummy_meta == FLB_TRUE) {
         flb_dummy_meta(out_buf, out_size);
@@ -740,8 +791,32 @@ int flb_kube_meta_get(struct flb_kube *ctx,
         }
     }
 
+    /*
+     * The retrieved buffer may have two serialized items:
+     *
+     * [0] = kubernetes metadata (annotations, labels)
+     * [1] = Annotation properties
+     *
+     * note: annotation properties are optional.
+     */
+    msgpack_unpacked_init(&result);
+
+    /* Unpack to get the offset/bytes of the first item */
+    msgpack_unpack_next(&result, hash_meta_buf, hash_meta_size, &off);
+
+    /* Set the pointer and proper size for the caller */
     *out_buf = hash_meta_buf;
-    *out_size = hash_meta_size;
+    *out_size = off;
+
+    /* A new unpack_next() call will succeed If annotation properties exists */
+    ret = msgpack_unpack_next(&result, hash_meta_buf, hash_meta_size, &off);
+    if (ret == MSGPACK_UNPACK_SUCCESS) {
+        /* Unpack the remaining data into properties structure */
+        flb_kube_prop_unpack(props,
+                             hash_meta_buf + *out_size,
+                             hash_meta_size - *out_size);
+    }
+    msgpack_unpacked_destroy(&result);
 
     return 0;
 }

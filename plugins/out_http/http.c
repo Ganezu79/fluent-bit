@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@
 
 struct flb_output_plugin out_http_plugin;
 
-static char *msgpack_to_json(char *data, uint64_t bytes, uint64_t *out_size)
+static char *msgpack_to_json(struct flb_out_http_config *ctx, char *data, uint64_t bytes, uint64_t *out_size)
 {
     int i;
     int ret;
@@ -74,14 +74,14 @@ static char *msgpack_to_json(char *data, uint64_t bytes, uint64_t *out_size)
         }
 
         flb_time_pop_from_msgpack(&tm, &result, &obj);
-        map   = root.via.array.ptr[1];
+        map = root.via.array.ptr[1];
 
         map_size = map.via.map.size;
         msgpack_pack_map(&tmp_pck, map_size + 1);
 
         /* Append date k/v */
-        msgpack_pack_str(&tmp_pck, 4);
-        msgpack_pack_str_body(&tmp_pck, "date", 4);
+        msgpack_pack_str(&tmp_pck, ctx->json_date_key_len);
+        msgpack_pack_str_body(&tmp_pck, ctx->json_date_key, ctx->json_date_key_len);
         msgpack_pack_double(&tmp_pck, flb_time_to_double(&tm));
 
         for (i = 0; i < map_size; i++) {
@@ -99,6 +99,33 @@ static char *msgpack_to_json(char *data, uint64_t bytes, uint64_t *out_size)
     /* Format to JSON */
     ret = flb_msgpack_raw_to_json_str(tmp_sbuf.data, tmp_sbuf.size,
                                       &json_buf, &json_size);
+
+    /* Optionally convert to JSON stream from JSON array */
+    if (ctx->out_format == FLB_HTTP_OUT_JSON_STREAM) {
+        char *p;
+        char *end = json_buf + json_size;
+        int level = 0;
+        int in_string = FLB_FALSE;
+        int in_escape = FLB_FALSE;
+
+        for (p = json_buf; p!=end; p++) {
+            if (in_escape)
+                in_escape = FLB_FALSE;
+            else if (*p == '\\')
+                in_escape = FLB_TRUE;
+            else if (*p == '"')
+                in_string = !in_string;
+            else if (!in_string) {
+                if (*p == '{')
+                    level++;
+                else if (*p == '}')
+                    level--;
+                else if ((*p == '[' || *p == ']' || *p == ',') && level == 0)
+                    *p=' ';
+            }
+        }
+    }
+
     msgpack_sbuffer_destroy(&tmp_sbuf);
     if (ret != 0) {
         return NULL;
@@ -109,7 +136,7 @@ static char *msgpack_to_json(char *data, uint64_t bytes, uint64_t *out_size)
 }
 
 int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
-               void *data)
+                     void *data)
 {
     int ulen;
     int io_flags = 0;
@@ -117,7 +144,7 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
     char *tmp;
     struct flb_upstream *upstream;
     struct flb_out_http_config *ctx = NULL;
-    (void) data;
+    (void)data;
 
     /* Allocate plugin context */
     ctx = flb_calloc(1, sizeof(struct flb_out_http_config));
@@ -127,15 +154,15 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
     }
     /*
      * Check if a Proxy have been set, if so the Upstream manager will use
-     * the Proxy end-point and then we let the HTTP client know about it,
-     * so it can adjust the HTTP requests.
+     * the Proxy end-point and then we let the HTTP client know about it, so
+     * it can adjust the HTTP requests.
      */
     tmp = flb_output_get_property("proxy", ins);
     if (tmp) {
         /*
          * Here we just want to lookup two things: host and port, we are
-         * going to skip validations as most of them are handled by the
-         * HTTP Client in a later stage.
+         * going to skip validations as most of them are handled by the HTTP
+         * Client in a later stage.
          */
         char *p;
         char *addr;
@@ -145,8 +172,8 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
             flb_free(ctx);
             return -1;
         }
-        addr += 2; /* get right to the host section */
-        if (*addr == '[') { /* IPv6 */
+        addr += 2;              /* get right to the host section */
+        if (*addr == '[') {     /* IPv6 */
             p = strchr(addr, ']');
             if (!p) {
                 flb_free(ctx);
@@ -207,13 +234,13 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
         upstream = flb_upstream_create(config,
                                        ctx->proxy_host,
                                        ctx->proxy_port,
-                                       io_flags, (void *) &ins->tls);
+                                       io_flags, (void *)&ins->tls);
     }
     else {
         upstream = flb_upstream_create(config,
                                        ins->host.name,
                                        ins->host.port,
-                                       io_flags, (void *) &ins->tls);
+                                       io_flags, (void *)&ins->tls);
     }
 
     if (!upstream) {
@@ -269,13 +296,27 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
         else if (strcasecmp(tmp, "json") == 0) {
             ctx->out_format = FLB_HTTP_OUT_JSON;
         }
+        else if (strcasecmp(tmp, "json_stream") == 0) {
+            ctx->out_format = FLB_HTTP_OUT_JSON_STREAM;
+        }
         else {
             flb_warn("[out_http] unrecognized 'format' option. Using 'msgpack'");
         }
     }
 
+    /* Date key for JSON output */
+    tmp = flb_output_get_property("json_date_key", ins);
+    if (!tmp) {
+        ctx->json_date_key     = flb_strdup("date");
+        ctx->json_date_key_len = strlen(ctx->json_date_key);
+    }
+    else {
+        ctx->json_date_key     = flb_strdup(tmp);
+        ctx->json_date_key_len = strlen(ctx->json_date_key);
+    }
+
     ctx->u = upstream;
-    ctx->uri  = uri;
+    ctx->uri = uri;
     ctx->host = ins->host.name;
     ctx->port = ins->host.port;
 
@@ -285,10 +326,10 @@ int cb_http_init(struct flb_output_instance *ins, struct flb_config *config,
 }
 
 void cb_http_flush(void *data, size_t bytes,
-                   char *tag, int tag_len,
-                   struct flb_input_instance *i_ins,
-                   void *out_context,
-                   struct flb_config *config)
+                        char *tag, int tag_len,
+                        struct flb_input_instance *i_ins,
+                        void *out_context,
+                        struct flb_config *config)
 {
     int ret;
     int out_ret = FLB_OK;
@@ -299,10 +340,10 @@ void cb_http_flush(void *data, size_t bytes,
     struct flb_http_client *c;
     void *body = NULL;
     uint64_t body_len;
-    (void) i_ins;
+    (void)i_ins;
 
-    if (ctx->out_format == FLB_HTTP_OUT_JSON) {
-        body = msgpack_to_json(data, bytes, &body_len);
+    if ((ctx->out_format == FLB_HTTP_OUT_JSON) || (ctx->out_format == FLB_HTTP_OUT_JSON_STREAM)) {
+        body = msgpack_to_json(ctx, data, bytes, &body_len);
     }
     else {
         body = data;
@@ -327,19 +368,19 @@ void cb_http_flush(void *data, size_t bytes,
                         ctx->proxy, 0);
 
     /* Append headers */
-    if (ctx->out_format == FLB_HTTP_OUT_JSON) {
+    if ((ctx->out_format == FLB_HTTP_OUT_JSON) || (ctx->out_format == FLB_HTTP_OUT_JSON_STREAM)) {
         flb_http_add_header(c,
                             FLB_HTTP_CONTENT_TYPE,
                             sizeof(FLB_HTTP_CONTENT_TYPE) - 1,
                             FLB_HTTP_MIME_JSON,
-                            sizeof(FLB_HTTP_MIME_JSON) -1);
+                            sizeof(FLB_HTTP_MIME_JSON) - 1);
     }
     else {
         flb_http_add_header(c,
                             FLB_HTTP_CONTENT_TYPE,
                             sizeof(FLB_HTTP_CONTENT_TYPE) - 1,
                             FLB_HTTP_MIME_MSGPACK,
-                            sizeof(FLB_HTTP_MIME_MSGPACK) -1);
+                            sizeof(FLB_HTTP_MIME_MSGPACK) - 1);
     }
 
     if (ctx->http_user && ctx->http_passwd) {
@@ -351,29 +392,35 @@ void cb_http_flush(void *data, size_t bytes,
         /*
          * Only allow the following HTTP status:
          *
-         *  - 200: OK
-         *  - 201: Created
-         *  - 202: Accepted
-         *  - 203: no authorative resp
-         *  - 204: No Content
-         *  - 205: Reset content
+         * - 200: OK
+         * - 201: Created
+         * - 202: Accepted
+         * - 203: no authorative resp
+         * - 204: No Content
+         * - 205: Reset content
+         *
          */
         if (c->resp.status < 200 || c->resp.status > 205) {
-            flb_error("[out_http] HTTP STATUS=%i", c->resp.status);
+            flb_error("[out_http] %s:%i, HTTP status=%i",
+                      ctx->host, ctx->port, c->resp.status);
             out_ret = FLB_RETRY;
         }
         else {
             if (c->resp.payload) {
-                flb_info("[out_http] HTTP STATUS=%i\n%s",
+                flb_info("[out_http] %s:%i, HTTP status=%i\n%s",
+                         ctx->host, ctx->port,
                          c->resp.status, c->resp.payload);
             }
             else {
-                flb_info("[out_http] HTTP STATUS=%i", c->resp.status);
+                flb_info("[out_http] %s:%i, HTTP status=%i",
+                         ctx->host, ctx->port,
+                         c->resp.status);
             }
         }
     }
     else {
-        flb_error("[out_http] could not flush records (http_do=%i)", ret);
+        flb_error("[out_http] could not flush records to %s:%i (http_do=%i)",
+                  ctx->host, ctx->port, ret);
         out_ret = FLB_RETRY;
     }
 
@@ -382,7 +429,7 @@ void cb_http_flush(void *data, size_t bytes,
     /* Release the connection */
     flb_upstream_conn_release(u_conn);
 
-    if (ctx->out_format == FLB_HTTP_OUT_JSON) {
+    if ((ctx->out_format == FLB_HTTP_OUT_JSON) || (ctx->out_format == FLB_HTTP_OUT_JSON_STREAM)) {
         flb_free(body);
     }
 
@@ -401,6 +448,7 @@ int cb_http_exit(void *data, struct flb_config *config)
     flb_free(ctx->http_passwd);
     flb_free(ctx->proxy_host);
     flb_free(ctx->uri);
+    flb_free(ctx->json_date_key);
     flb_free(ctx);
 
     return 0;
@@ -408,11 +456,11 @@ int cb_http_exit(void *data, struct flb_config *config)
 
 /* Plugin reference */
 struct flb_output_plugin out_http_plugin = {
-    .name           = "http",
-    .description    = "HTTP Output",
-    .cb_init        = cb_http_init,
-    .cb_pre_run     = NULL,
-    .cb_flush       = cb_http_flush,
-    .cb_exit        = cb_http_exit,
-    .flags          = FLB_OUTPUT_NET | FLB_IO_OPT_TLS,
+    .name = "http",
+    .description = "HTTP Output",
+    .cb_init = cb_http_init,
+    .cb_pre_run = NULL,
+    .cb_flush = cb_http_flush,
+    .cb_exit = cb_http_exit,
+    .flags = FLB_OUTPUT_NET | FLB_IO_OPT_TLS,
 };

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -128,6 +128,7 @@ int flb_me_fd_event(int fd, struct flb_me *me)
 
 int flb_me_destroy(struct flb_me *me)
 {
+    mk_event_timeout_destroy(me->config->evl, &me->event);
     flb_free(me);
     return 0;
 }

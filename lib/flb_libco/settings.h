@@ -18,11 +18,15 @@
 /* #define LIBCO_NO_SSE */
 
 #ifdef LIBCO_C
-  #ifdef LIBCO_MP
-    #define thread_local __thread
-  #else
-    #define thread_local
-  #endif
+    #ifdef LIBCO_MP
+        #if !defined(_WIN32) && !defined(_WIN64)  
+            #define thread_local __thread
+        #else
+            #define thread_local __declspec(thread) 
+        #endif
+    #else
+        #define thread_local
+    #endif
 #endif
 
 #if __STDC_VERSION__ >= 201112L

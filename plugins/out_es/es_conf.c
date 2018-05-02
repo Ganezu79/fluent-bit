@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -24,21 +24,6 @@
 
 #include "es.h"
 #include "es_conf.h"
-
-static int bool_value(char *v)
-{
-    if (strcasecmp(v, "true") == 0) {
-        return FLB_TRUE;
-    }
-    else if (strcasecmp(v, "on") == 0) {
-        return FLB_TRUE;
-    }
-    else if (strcasecmp(v, "yes") == 0) {
-        return FLB_TRUE;
-    }
-
-    return FLB_FALSE;
-}
 
 struct flb_elasticsearch *flb_es_conf_create(struct flb_output_instance *ins,
                                              struct flb_config *config)
@@ -150,7 +135,7 @@ struct flb_elasticsearch *flb_es_conf_create(struct flb_output_instance *ins,
     /* Logstash_Format */
     tmp = flb_output_get_property("logstash_format", ins);
     if (tmp) {
-        ctx->logstash_format = bool_value(tmp);
+        ctx->logstash_format = flb_utils_bool(tmp);
     }
     else {
         ctx->logstash_format = FLB_TRUE;
@@ -203,7 +188,7 @@ struct flb_elasticsearch *flb_es_conf_create(struct flb_output_instance *ins,
     /* Include Tag key */
     tmp = flb_output_get_property("include_tag_key", ins);
     if (tmp) {
-        ctx->include_tag_key = bool_value(tmp);
+        ctx->include_tag_key = flb_utils_bool(tmp);
     }
     else {
         ctx->include_tag_key = FLB_FALSE;
@@ -252,6 +237,14 @@ struct flb_elasticsearch *flb_es_conf_create(struct flb_output_instance *ins,
     }
     else {
         snprintf(ctx->uri, sizeof(ctx->uri) - 1, "/_bulk");
+    }
+
+    /* Generate _id */
+    tmp = flb_output_get_property("generate_id", ins);
+    if (tmp) {
+        ctx->generate_id = flb_utils_bool(tmp);
+    } else {
+        ctx->generate_id = FLB_FALSE;
     }
 
     return ctx;

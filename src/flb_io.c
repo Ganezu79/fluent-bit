@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2015-2017 Treasure Data Inc.
+ *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -77,6 +77,7 @@ FLB_INLINE int flb_io_net_connect(struct flb_upstream_conn *u_conn,
     int err;
     int error = 0;
     uint32_t mask;
+    char so_error_buf[256];
     flb_sockfd_t fd;
     socklen_t len = sizeof(error);
     struct flb_upstream *u = u_conn->u;
@@ -169,8 +170,9 @@ FLB_INLINE int flb_io_net_connect(struct flb_upstream_conn *u_conn,
 
             if (error != 0) {
                 /* Connection is broken, not much to do here */
-                flb_error("[io] TCP connection failed: %s:%i",
-                          u->tcp_host, u->tcp_port);
+                strerror_r(error, so_error_buf, sizeof(so_error_buf) - 1);
+                flb_error("[io] TCP connection failed: %s:%i (%s)",
+                          u->tcp_host, u->tcp_port, so_error_buf);
                 flb_socket_close(fd);
                 return -1;
             }
@@ -256,10 +258,12 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
 {
     int ret = 0;
     int error;
+    uint32_t mask;
     ssize_t bytes;
     size_t total = 0;
     size_t to_send;
     socklen_t slen = sizeof(error);
+    char so_error_buf[256];
     struct flb_upstream *u = u_conn->u;
 
  retry:
@@ -286,9 +290,7 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
 
     if (bytes == -1) {
         if (errno == EAGAIN) {
-            MK_EVENT_NEW(&u_conn->event);
             u_conn->thread = th;
-
             ret = mk_event_add(u->evl,
                                u_conn->fd,
                                FLB_ENGINE_EV_THREAD,
@@ -307,6 +309,9 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
              */
             flb_thread_yield(th, FLB_FALSE);
 
+            /* Save events mask since mk_event_del() will reset it */
+            mask = u_conn->event.mask;
+
             /* We got a notification, remove the event registered */
             ret = mk_event_del(u->evl, &u_conn->event);
             if (ret == -1) {
@@ -314,7 +319,7 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
             }
 
             /* Check the connection status */
-            if (u_conn->event.mask & MK_EVENT_WRITE) {
+            if (mask & MK_EVENT_WRITE) {
                 ret = getsockopt(u_conn->fd, SOL_SOCKET, SO_ERROR, &error, &slen);
                 if (ret == -1) {
                     flb_error("[io] could not validate socket status");
@@ -323,8 +328,11 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
 
                 if (error != 0) {
                     /* Connection is broken, not much to do here */
-                    flb_error("[io] TCP connection failed: %s:%i",
-                              u->tcp_host, u->tcp_port);
+                    strerror_r(error, so_error_buf, sizeof(so_error_buf) - 1);
+                    flb_error("[io fd=%i] error sending data to: %s:%i (%s)",
+                              u_conn->fd,
+                              u->tcp_host, u->tcp_port, so_error_buf);
+
                     return -1;
                 }
 
@@ -340,9 +348,6 @@ static FLB_INLINE int net_io_write_async(struct flb_thread *th,
             return -1;
         }
     }
-
-    /* Update statistics */
-    //flb_stats_update(out->stats_fd, ret, 0);
 
     /* Update counters */
     total += bytes;
@@ -455,6 +460,7 @@ int flb_io_net_write(struct flb_upstream_conn *u_conn, void *data,
         ret = flb_io_tls_net_write(th, u_conn, data, len, out_len);
     }
 #endif
+
     if (ret == -1 && u_conn->fd > 0) {
         flb_socket_close(u_conn->fd);
         u_conn->fd = -1;
