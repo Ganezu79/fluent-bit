@@ -156,11 +156,16 @@ static int build_headers(struct flb_http_client *c,
     }
 
     t = time(NULL);
+#if defined(_WIN64) || defined(_WIN32)
+    tm = *gmtime(&t);
+#else
     if (!gmtime_r(&t, &tm)) {
         flb_errno();
         flb_sds_destroy(rfc1123date);
         return -1;
     }
+#endif
+
     size = strftime(rfc1123date,
                     flb_sds_alloc(rfc1123date) - 1,
                     "%a, %d %b %Y %H:%M:%S GMT", &tm);

@@ -34,6 +34,7 @@ extern struct flb_input_plugin in_mqtt_plugin;
 extern struct flb_input_plugin in_lib_plugin;
 extern struct flb_input_plugin in_random_plugin;
 
+extern struct flb_output_plugin out_azure_plugin;
 extern struct flb_output_plugin out_counter_plugin;
 extern struct flb_output_plugin out_es_plugin;
 extern struct flb_output_plugin out_exit_plugin;
@@ -80,6 +81,9 @@ void flb_register_plugins(struct flb_config *config)
     in = &in_random_plugin;
     mk_list_add(&in->_head, &config->in_plugins);
 
+
+    out = &out_azure_plugin;
+    mk_list_add(&out->_head, &config->out_plugins);
 
     out = &out_counter_plugin;
     mk_list_add(&out->_head, &config->out_plugins);
